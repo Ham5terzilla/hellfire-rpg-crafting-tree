@@ -9,7 +9,7 @@ const PLAYER_ITEM_ALLOWLIST = new Set([
 ]);
 
 const state = {
-  allItems: [], craftedItems: [], byCode: new Map(), selected: null,
+  allItems: [], craftedItems: [], byCode: new Map(), usedBy: new Map(), selected: null,
   searchResults: [], activeResult: -1, scale: 1, x: 32, y: 32, drag: null,
   ignoreClickUntil: 0,
 };
@@ -36,6 +36,7 @@ async function boot() {
     const data = await response.json();
     state.allItems = Array.isArray(data.items) ? data.items : [];
     state.byCode = new Map(state.allItems.map((item) => [normalizeCode(item.rawCode), item]));
+    state.usedBy = buildUsedByIndex();
     state.craftedItems = state.allItems
       .filter((item) => item.recipe?.length && isPlayerFacing(item))
       .sort((left, right) => left.name.localeCompare(right.name));
@@ -169,10 +170,80 @@ function renderSelectedCard(item) {
 
 function renderTree(item) {
   elements.stage.replaceChildren();
-  const tree = document.createElement('ul'); tree.className = 'recipe-tree';
+  const composite = document.createElement('div'); composite.className = 'tree-composite';
+  const usages = recipesUsing(item);
+  if (usages.length) {
+    const label = document.createElement('p'); label.className = 'usage-label'; label.textContent = 'Crafts into';
+    const usageTree = document.createElement('ul');
+    usageTree.className = 'recipe-tree usage-tree';
+    usageTree.setAttribute('aria-label', `Items crafted using ${item.name}`);
+    usageTree.append(renderUsageAnchor(item));
+    composite.append(label, usageTree);
+  }
+  const tree = document.createElement('ul');
+  tree.className = `recipe-tree ingredient-tree${usages.length ? ' has-usages' : ''}`;
   tree.append(renderBranch(item, 1, 1, new Set(), true));
-  elements.stage.append(tree);
+  composite.append(tree); elements.stage.append(composite);
   requestAnimationFrame(fitTree);
+}
+
+function renderUsageAnchor(item) {
+  const listItem = document.createElement('li');
+  const anchor = document.createElement('span'); anchor.className = 'usage-anchor';
+  anchor.setAttribute('aria-hidden', 'true'); listItem.append(anchor);
+  const children = recipesUsing(item);
+  if (children.length) {
+    const childList = document.createElement('ul');
+    const path = new Set([normalizeCode(item.rawCode)]);
+    children.forEach(({ item: product, quantity }) => {
+      childList.append(renderUsageBranch(product, quantity, path));
+    });
+    listItem.append(childList);
+  }
+  return listItem;
+}
+
+function renderUsageBranch(item, edgeQuantity, path) {
+  const listItem = document.createElement('li');
+  const code = normalizeCode(item.rawCode);
+  const circular = path.has(code);
+  const children = circular ? [] : recipesUsing(item);
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = `node-card usage-card${children.length ? ' craftable' : ''}${circular ? ' cycle' : ''}`;
+  card.disabled = !children.length;
+  card.append(createIcon(item, 'node-placeholder'));
+
+  if (edgeQuantity > 1) {
+    const quantity = document.createElement('span');
+    quantity.className = 'quantity-badge'; quantity.textContent = `×${edgeQuantity}`;
+    card.append(quantity);
+  }
+  const name = document.createElement('span'); name.className = 'node-name';
+  name.textContent = item.name || 'Unknown crafted item';
+  const meta = document.createElement('span'); meta.className = 'node-meta';
+  meta.textContent = circular ? 'Circular reference' : children.length
+    ? `Used in ${children.length} more recipe${children.length === 1 ? '' : 's'}`
+    : (item.quality || 'Final crafted item');
+  card.append(name, meta);
+
+  if (children.length) {
+    card.setAttribute('aria-expanded', 'true'); card.title = 'Collapse this upgrade branch';
+    const mark = document.createElement('span'); mark.className = 'collapse-mark';
+    mark.textContent = '−'; mark.setAttribute('aria-hidden', 'true'); card.append(mark);
+  }
+  listItem.append(card);
+
+  if (children.length) {
+    const childList = document.createElement('ul');
+    const nextPath = new Set(path); nextPath.add(code);
+    children.forEach(({ item: product, quantity }) => {
+      childList.append(renderUsageBranch(product, quantity, nextPath));
+    });
+    listItem.append(childList);
+    bindBranchToggle(card, childList, 'upgrade');
+  }
+  return listItem;
 }
 
 function renderBranch(item, edgeQuantity, totalQuantity, path, isRoot = false) {
@@ -213,18 +284,22 @@ function renderBranch(item, edgeQuantity, totalQuantity, path, isRoot = false) {
       childList.append(renderBranch(ingredient, quantity, totalQuantity * quantity, nextPath));
     });
     listItem.append(childList);
-    card.addEventListener('click', (event) => {
-      if (performance.now() < state.ignoreClickUntil) {
-        event.preventDefault(); event.stopPropagation(); return;
-      }
-      event.stopPropagation(); childList.classList.toggle('collapsed');
-      const expanded = !childList.classList.contains('collapsed');
-      card.setAttribute('aria-expanded', String(expanded));
-      card.title = expanded ? 'Collapse this recipe branch' : 'Expand this recipe branch';
-      card.querySelector('.collapse-mark').textContent = expanded ? '−' : '+';
-    });
+    bindBranchToggle(card, childList, 'recipe');
   }
   return listItem;
+}
+
+function bindBranchToggle(card, childList, branchKind) {
+  card.addEventListener('click', (event) => {
+    if (performance.now() < state.ignoreClickUntil) {
+      event.preventDefault(); event.stopPropagation(); return;
+    }
+    event.stopPropagation(); childList.classList.toggle('collapsed');
+    const expanded = !childList.classList.contains('collapsed');
+    card.setAttribute('aria-expanded', String(expanded));
+    card.title = `${expanded ? 'Collapse' : 'Expand'} this ${branchKind} branch`;
+    card.querySelector('.collapse-mark').textContent = expanded ? '−' : '+';
+  });
 }
 
 function renderMaterials(item) {
@@ -275,6 +350,31 @@ function recipeChildren(item) {
     item: state.byCode.get(normalizeCode(ingredient.rawCode)) || { rawCode: ingredient.rawCode, name: ingredient.name || 'Unknown ingredient', recipe: [] },
     quantity: Math.max(1, Number(ingredient.quantity) || 1),
   }));
+}
+
+function buildUsedByIndex() {
+  const buckets = new Map();
+  state.allItems.forEach((product) => {
+    if (!product.recipe?.length || !isPlayerFacing(product)) return;
+    product.recipe.forEach((ingredient) => {
+      const ingredientCode = normalizeCode(ingredient.rawCode);
+      const productCode = normalizeCode(product.rawCode);
+      if (!ingredientCode || !productCode) return;
+      if (!buckets.has(ingredientCode)) buckets.set(ingredientCode, new Map());
+      const products = buckets.get(ingredientCode);
+      const existing = products.get(productCode) || { item: product, quantity: 0 };
+      existing.quantity += Math.max(1, Number(ingredient.quantity) || 1);
+      products.set(productCode, existing);
+    });
+  });
+  return new Map([...buckets].map(([code, products]) => [
+    code,
+    [...products.values()].sort((left, right) => left.item.name.localeCompare(right.item.name)),
+  ]));
+}
+
+function recipesUsing(item) {
+  return state.usedBy.get(normalizeCode(item.rawCode)) || [];
 }
 
 function createIcon(item, placeholderClass) {
@@ -392,7 +492,7 @@ function registerWebMcpTool() {
     void Promise.resolve(context.registerTool({
       name: 'select_crafted_item',
       title: 'Select crafted item',
-      description: 'Select a Hellfire RPG crafted item and display its complete recursive ingredient tree.',
+      description: 'Select a Hellfire RPG crafted item and display its complete recursive ingredient and upgrade trees.',
       inputSchema: {
         type: 'object',
         properties: { itemName: { type: 'string', description: 'The crafted item name to select.' } },
