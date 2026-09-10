@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#110f0d">
+  <meta name="description" content="Explore every ingredient in Hellfire RPG crafting recipes as a recursive tree.">
+  <title>Hellfire Crafting Tree</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Hellfire Crafting Tree home">
+      <span class="brand-mark" aria-hidden="true">H</span>
+      <span><strong>Hellfire</strong><small>Crafting Tree</small></span>
+    </a>
+    <div class="picker" id="picker">
+      <label for="item-search">Crafted item</label>
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+        <input id="item-search" type="search" autocomplete="off" placeholder="Search crafted items…" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false">
+        <kbd>/</kbd>
+      </div>
+      <div class="search-results" id="search-results" role="listbox" hidden></div>
+    </div>
+    <div class="data-note" id="data-note" aria-live="polite">Loading map data…</div>
+  </header>
+
+  <main class="workspace">
+    <aside class="inspector" aria-label="Recipe summary">
+      <section class="selected-card" id="selected-card">
+        <div class="skeleton icon-skeleton"></div>
+        <div class="selected-copy"><div class="skeleton line wide"></div><div class="skeleton line short"></div></div>
+      </section>
+      <section class="metrics" id="metrics" aria-label="Recipe size"></section>
+      <section class="materials-section">
+        <div class="section-heading">
+          <div><p class="eyebrow">Shopping list</p><h2>Base materials</h2></div>
+          <span class="material-total" id="material-total"></span>
+        </div>
+        <div class="materials-list" id="materials-list"><div class="empty-note">Choose an item to see its materials.</div></div>
+      </section>
+    </aside>
+
+    <section class="tree-panel" aria-label="Crafting tree">
+      <div class="tree-toolbar">
+        <div><p class="eyebrow">Recipe map</p><h1 id="tree-title">Crafting tree</h1></div>
+        <div class="view-controls" aria-label="Tree zoom controls">
+          <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+          <output id="zoom-value" aria-live="polite">100%</output>
+          <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+          <button type="button" class="fit-button" id="fit-tree">Fit</button>
+        </div>
+      </div>
+      <div class="tree-viewport" id="tree-viewport" tabindex="0" aria-label="Interactive crafting tree. Drag to pan and use the mouse wheel or controls to zoom.">
+        <div class="loading-state" id="loading-state"><span class="loader" aria-hidden="true"></span><p>Reading recipes from the map…</p></div>
+        <div class="tree-stage" id="tree-stage"></div>
+        <div class="gesture-hint" id="gesture-hint">Drag to move · Scroll to zoom · Select a crafted node to collapse it</div>
+      </div>
+    </section>
+  </main>
+  <script src="app.js" defer></script>
+</body>
+</html>
