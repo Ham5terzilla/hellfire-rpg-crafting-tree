@@ -194,24 +194,20 @@ function renderUsageAnchor(item) {
   const children = recipesUsing(item);
   if (children.length) {
     const childList = document.createElement('ul');
-    const path = new Set([normalizeCode(item.rawCode)]);
     children.forEach(({ item: product, quantity }) => {
-      childList.append(renderUsageBranch(product, quantity, path));
+      childList.append(renderUsageBranch(product, quantity));
     });
     listItem.append(childList);
   }
   return listItem;
 }
 
-function renderUsageBranch(item, edgeQuantity, path) {
+function renderUsageBranch(item, edgeQuantity) {
   const listItem = document.createElement('li');
-  const code = normalizeCode(item.rawCode);
-  const circular = path.has(code);
-  const children = circular ? [] : recipesUsing(item);
   const card = document.createElement('button');
   card.type = 'button';
-  card.className = `node-card usage-card${children.length ? ' craftable' : ''}${circular ? ' cycle' : ''}`;
-  card.disabled = !children.length;
+  card.className = 'node-card usage-card';
+  card.disabled = true;
   card.append(createIcon(item, 'node-placeholder'));
 
   if (edgeQuantity > 1) {
@@ -222,27 +218,9 @@ function renderUsageBranch(item, edgeQuantity, path) {
   const name = document.createElement('span'); name.className = 'node-name';
   name.textContent = item.name || 'Unknown crafted item';
   const meta = document.createElement('span'); meta.className = 'node-meta';
-  meta.textContent = circular ? 'Circular reference' : children.length
-    ? `Used in ${children.length} more recipe${children.length === 1 ? '' : 's'}`
-    : (item.quality || 'Final crafted item');
+  meta.textContent = item.quality || 'Crafted item';
   card.append(name, meta);
-
-  if (children.length) {
-    card.setAttribute('aria-expanded', 'true'); card.title = 'Collapse this upgrade branch';
-    const mark = document.createElement('span'); mark.className = 'collapse-mark';
-    mark.textContent = '−'; mark.setAttribute('aria-hidden', 'true'); card.append(mark);
-  }
   listItem.append(card);
-
-  if (children.length) {
-    const childList = document.createElement('ul');
-    const nextPath = new Set(path); nextPath.add(code);
-    children.forEach(({ item: product, quantity }) => {
-      childList.append(renderUsageBranch(product, quantity, nextPath));
-    });
-    listItem.append(childList);
-    bindBranchToggle(card, childList, 'upgrade');
-  }
   return listItem;
 }
 
