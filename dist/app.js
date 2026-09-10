@@ -11,6 +11,7 @@ const PLAYER_ITEM_ALLOWLIST = new Set([
 const state = {
   allItems: [], craftedItems: [], byCode: new Map(), selected: null,
   searchResults: [], activeResult: -1, scale: 1, x: 32, y: 32, drag: null,
+  ignoreClickUntil: 0,
 };
 
 const elements = {
@@ -79,6 +80,7 @@ function bindInteractions() {
   elements.viewport.addEventListener('pointermove', moveDrag);
   elements.viewport.addEventListener('pointerup', stopDrag);
   elements.viewport.addEventListener('pointercancel', stopDrag);
+  elements.viewport.addEventListener('dragstart', (event) => event.preventDefault());
 }
 
 function updateSearch(query) {
@@ -212,6 +214,9 @@ function renderBranch(item, edgeQuantity, totalQuantity, path, isRoot = false) {
     });
     listItem.append(childList);
     card.addEventListener('click', (event) => {
+      if (performance.now() < state.ignoreClickUntil) {
+        event.preventDefault(); event.stopPropagation(); return;
+      }
       event.stopPropagation(); childList.classList.toggle('collapsed');
       const expanded = !childList.classList.contains('collapsed');
       card.setAttribute('aria-expanded', String(expanded));
@@ -275,6 +280,7 @@ function recipeChildren(item) {
 function createIcon(item, placeholderClass) {
   if (item.iconFile) {
     const image = document.createElement('img'); image.src = item.iconFile; image.alt = ''; image.loading = 'lazy';
+    image.draggable = false;
     image.addEventListener('error', () => image.replaceWith(createPlaceholder(item, placeholderClass)), { once: true });
     return image;
   }
@@ -320,20 +326,27 @@ function handleWheel(event) {
 }
 
 function startDrag(event) {
-  if (event.button !== 0 || event.target.closest('.node-card, .view-controls')) return;
+  if (event.button !== 0 || event.target.closest('.view-controls')) return;
+  event.preventDefault();
   elements.viewport.setPointerCapture(event.pointerId);
-  state.drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: state.x, originY: state.y };
-  elements.viewport.classList.add('dragging');
+  state.drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: state.x, originY: state.y, moved: false };
 }
 
 function moveDrag(event) {
   if (!state.drag || state.drag.pointerId !== event.pointerId) return;
-  state.x = state.drag.originX + event.clientX - state.drag.startX;
-  state.y = state.drag.originY + event.clientY - state.drag.startY; applyTransform();
+  const deltaX = event.clientX - state.drag.startX;
+  const deltaY = event.clientY - state.drag.startY;
+  if (!state.drag.moved && Math.hypot(deltaX, deltaY) < 4) return;
+  if (!state.drag.moved) {
+    state.drag.moved = true; elements.viewport.classList.add('dragging');
+  }
+  state.x = state.drag.originX + deltaX;
+  state.y = state.drag.originY + deltaY; applyTransform();
 }
 
 function stopDrag(event) {
   if (!state.drag || state.drag.pointerId !== event.pointerId) return;
+  if (state.drag.moved) state.ignoreClickUntil = performance.now() + 180;
   state.drag = null; elements.viewport.classList.remove('dragging');
 }
 
