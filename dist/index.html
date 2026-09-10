@@ -15,15 +15,37 @@
       <span><strong>Hellfire</strong><small>Crafting Tree</small></span>
     </a>
     <div class="picker" id="picker">
-      <label for="item-search">Crafted item</label>
       <div class="search-box">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
-        <input id="item-search" type="search" autocomplete="off" placeholder="Search crafted items…" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false">
+        <input id="item-search" type="search" autocomplete="off" placeholder="Search crafts…" aria-label="Search crafts, items, enemies, and shops" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false">
         <kbd>/</kbd>
+        <div class="search-mode-row">
+          <label for="search-mode">Search mode</label>
+          <select id="search-mode" aria-label="Search mode">
+            <option value="crafting" selected>Crafts</option>
+            <option value="enemies">Enemies</option>
+            <option value="shops">Shops</option>
+            <option value="items">All items</option>
+            <option value="everything">Everything</option>
+            <option value="everything-technical">Everything + technical</option>
+          </select>
+        </div>
       </div>
       <div class="search-results" id="search-results" role="listbox" hidden></div>
     </div>
     <div class="data-note" id="data-note" aria-live="polite">Loading map data…</div>
+    <div class="layout-control">
+      <label for="layout-select">Layout</label>
+      <select id="layout-select" aria-label="Workspace layout" title="Choose the position of the crafting summary, recipe map and item details">
+        <option value="summary-map-details">Summary · Map · Details</option>
+        <option value="map-summary-details">Map · Summary · Details</option>
+        <option value="summary-details-map">Summary · Details · Map</option>
+        <option value="details-summary-map">Details · Summary · Map</option>
+        <option value="map-details-summary">Map · Details · Summary</option>
+        <option value="details-map-summary">Details · Map · Summary</option>
+      </select>
+    </div>
+    <button type="button" class="map-toggle" id="toggle-recipe-map" aria-pressed="false">Hide map</button>
   </header>
 
   <main class="workspace">
@@ -35,12 +57,59 @@
       <section class="metrics" id="metrics" aria-label="Recipe size"></section>
       <section class="materials-section">
         <div class="section-heading">
-          <div><p class="eyebrow">Shopping list</p><h2>Base materials</h2></div>
+          <div><p class="eyebrow">Craft summary</p><h2 id="summary-title">Base materials</h2></div>
           <span class="material-total" id="material-total"></span>
         </div>
-        <div class="materials-list" id="materials-list"><div class="empty-note">Choose an item to see its materials.</div></div>
+        <div class="summary-tabs" role="tablist" aria-label="Craft summary views">
+          <button type="button" class="summary-tab active" id="summary-tab-materials" role="tab" aria-selected="true" aria-controls="materials-list">Base materials</button>
+          <button type="button" class="summary-tab" id="summary-tab-nested" role="tab" aria-selected="false" aria-controls="nested-crafting-list">Nested crafting</button>
+          <button type="button" class="summary-settings-toggle" id="summary-settings-toggle" aria-expanded="false" aria-controls="summary-settings-panel" title="Summary settings" aria-label="Summary settings">⚙</button>
+          <div class="summary-settings-panel" id="summary-settings-panel" hidden>
+            <div class="summary-setting">
+              <label for="summary-sort-mode">Sort by</label>
+              <select id="summary-sort-mode">
+                <option value="rarity">Quality → quantity</option>
+                <option value="quantity">Quantity → quality</option>
+              </select>
+            </div>
+            <div class="summary-setting-pair">
+              <label for="summary-quantity-order">Quantity</label>
+              <select id="summary-quantity-order">
+                <option value="desc">High → low</option>
+                <option value="asc">Low → high</option>
+              </select>
+            </div>
+            <div class="summary-setting-pair">
+              <label for="summary-rarity-order">Quality</label>
+              <select id="summary-rarity-order">
+                <option value="desc">High → low</option>
+                <option value="asc">Low → high</option>
+              </select>
+            </div>
+            <label class="summary-sync-row" title="Base materials are calculated from the remaining quantities selected in Nested Crafting">
+              <input type="checkbox" id="summary-sync-nested">
+              <span>Sync base materials with Nested Crafting</span>
+            </label>
+            <label class="summary-sync-row" title="Base Materials only: move fully collected materials to the bottom. This does not reorder Nested Crafting.">
+              <input type="checkbox" id="summary-deprioritize-completed">
+              <span>Move completed materials to bottom</span>
+            </label>
+            <label class="summary-sync-row" title="Dim fully collected materials in both Base Materials and Nested Crafting.">
+              <input type="checkbox" id="summary-dim-completed">
+              <span>Dim completed materials</span>
+            </label>
+            <button type="button" class="summary-reset-owned" id="summary-reset-owned">Reset all owned quantities</button>
+            <p class="summary-settings-note">Quick-view progress is temporary and belongs only to the currently selected recipe. Switching recipes resets it.</p>
+          </div>
+        </div>
+        <div class="materials-list summary-view" id="materials-list" role="tabpanel" aria-labelledby="summary-tab-materials"><div class="empty-note">Choose an item to see its materials.</div></div>
+        <div class="nested-crafting-list summary-view" id="nested-crafting-list" role="tabpanel" aria-labelledby="summary-tab-nested" hidden><div class="empty-note">Choose an item to see its crafting requirements.</div></div>
       </section>
     </aside>
+
+    <div class="panel-resizer" id="inspector-resizer" role="separator" aria-orientation="vertical" aria-label="Resize recipe summary panel" tabindex="0" title="Drag to resize">
+      <span aria-hidden="true"></span>
+    </div>
 
     <section class="tree-panel" aria-label="Crafting tree">
       <div class="tree-toolbar">
@@ -58,6 +127,19 @@
         <div class="gesture-hint" id="gesture-hint">Items above use this item · Ingredients below make it · Drag to move · Scroll to zoom</div>
       </div>
     </section>
+
+    <div class="panel-resizer" id="details-resizer" role="separator" aria-orientation="vertical" aria-label="Resize item details panel" tabindex="0" title="Drag to resize">
+      <span aria-hidden="true"></span>
+    </div>
+
+    <aside class="details-panel" aria-label="Item details">
+      <div class="details-heading">
+        <div><p class="eyebrow">Item details</p><h2>Selected item</h2></div>
+      </div>
+      <section class="item-details" id="item-details">
+        <div class="details-empty">Click an item in the tree to inspect it.</div>
+      </section>
+    </aside>
   </main>
   <script src="app.js" defer></script>
 </body>
