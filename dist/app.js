@@ -18,6 +18,37 @@ const PLAYER_ITEM_ALLOWLIST = new Set([
 
 // Runtime state is grouped by responsibility so future features can add data,
 // indexes, or UI state without turning this object into another flat bag.
+const ITEM_BROWSER_DEFAULTS = Object.freeze({
+  mainStat: 'strength',
+  query: '',
+  searchMode: 'full',
+  instantSearch: true,
+  category: '',
+  quality: '',
+  slot: '',
+  classNames: [],
+  levelMin: '',
+  levelMax: '',
+  obtainedBy: [],
+  relations: { craftedFrom: '', craftsInto: '', usedIn: false, dropsFrom: '', dropCountMin: '', dropCountMax: '', soldBy: '', shopCountMin: '', shopCountMax: '' },
+  statGroups: [],
+  sort: 'match',
+  sortDirection: 'desc',
+  view: 'detailed',
+  selectedCode: '',
+  whyCode: '',
+});
+
+function createDefaultItemBrowserQuery() {
+  return {
+    ...ITEM_BROWSER_DEFAULTS,
+    classNames: [],
+    obtainedBy: [],
+    relations: { ...ITEM_BROWSER_DEFAULTS.relations },
+    statGroups: [],
+  };
+}
+
 const state = {
   data: {
     items: [],
@@ -31,12 +62,16 @@ const state = {
     enemiesByCode: new Map(),
     enemiesByName: new Map(),
     shopsByName: new Map(),
+    playerFacing: [],
     searchEntries: { crafting: [], items: [], enemies: [], shops: [], everything: [], 'everything-technical': [] },
   },
+  cache: { parsedStats: new WeakMap(), abilities: new WeakMap(), statCatalog: null, dynamicStatNames: null },
   ui: {
     selected: null,
     searchResults: [],
     activeResult: -1,
+    activeModule: 'recipes',
+    itemBrowser: createDefaultItemBrowserQuery(),
   },
   craftOwned: new Map(),
   nestedOwned: new Map(),
@@ -56,7 +91,7 @@ const state = {
 
 const elements = {
   picker: document.querySelector('#picker'), search: document.querySelector('#item-search'), searchMode: document.querySelector('#search-mode'),
-  results: document.querySelector('#search-results'), dataNote: document.querySelector('#data-note'),
+  results: document.querySelector('#search-results'), dataNote: document.querySelector('#database-source'), wearableItemsCount: document.querySelector('#wearable-items-count'), craftableItemsCount: document.querySelector('#craftable-items-count'),
   selectedCard: document.querySelector('#selected-card'), metrics: document.querySelector('#metrics'),
   materialTotal: document.querySelector('#material-total'), materialsList: document.querySelector('#materials-list'),
   nestedCraftingList: document.querySelector('#nested-crafting-list'),
@@ -83,7 +118,32 @@ const elements = {
   detailsResizer: document.querySelector('#details-resizer'),
   toggleRecipeMap: document.querySelector('#toggle-recipe-map'),
   layoutSelect: document.querySelector('#layout-select'),
+  recipeWorkspace: document.querySelector('#recipe-browser-workspace'),
+  itemBrowserWorkspace: document.querySelector('#item-browser-workspace'),
+  appNavButtons: [...document.querySelectorAll('.app-nav-button')],
+  itemBrowserSearch: document.querySelector('#item-browser-search'),
+  itemBrowserFullClear: document.querySelector('#item-browser-full-clear'),
+  itemBrowserCategory: document.querySelector('#item-browser-category'),
+  itemBrowserQuality: document.querySelector('#item-browser-quality'),
+  itemBrowserSlot: document.querySelector('#item-browser-slot'),
+  itemBrowserMainStat: document.querySelector('#item-browser-main-stat'),
+  itemBrowserLevelMin: document.querySelector('#item-browser-level-min'),
+  itemBrowserLevelMax: document.querySelector('#item-browser-level-max'),
+  itemBrowserClassList: document.querySelector('#item-browser-class-list'),
+  itemBrowserAddStatGroup: document.querySelector('#item-browser-add-stat-group'),
+  itemBrowserStatList: document.querySelector('#item-browser-stat-list'),
+  itemBrowserSort: document.querySelector('#item-browser-sort'),
+  itemBrowserSortDirection: document.querySelector('#item-browser-sort-direction'),
+  itemBrowserResults: document.querySelector('#item-browser-results'),
+  itemBrowserCount: document.querySelector('#item-browser-count'),
+  itemBrowserDetails: document.querySelector('#item-browser-details'),
+  itemBrowserSummary: document.querySelector('#item-browser-summary'),
+  itemBrowserSearchMode: document.querySelector('#item-browser-search-mode'), itemBrowserInstant: document.querySelector('#item-browser-instant'), itemBrowserExecute: document.querySelector('#item-browser-execute'), itemBrowserView: document.querySelector('#item-browser-view'),
+  itemBrowserSave: document.querySelector('#item-browser-save'), itemBrowserCopyLink: document.querySelector('#item-browser-copy-link'),
+  itemBrowserBackToTop: document.querySelector('#item-browser-back-to-top'),
 };
+
+const itemBrowserHistory = { restoring: false, lastCommitted: '', queryTimer: null };
 
 boot();
 
@@ -98,8 +158,9 @@ async function boot() {
     state.data.items = Array.isArray(data.items) ? data.items : [];
     state.data.enemies = Array.isArray(data.enemies) ? data.enemies : [];
     buildIndexes();
+    initializeItemBrowser();
     registerWebMcpTool();
-    elements.dataNote.textContent = `${state.data.craftedItems.length} crafted items · ${cleanMapName(data.sourceMap)}`;
+    updateDatabaseHeader(data);
     elements.loading.hidden = true;
 
     const requestedCode = normalizeCode(location.hash.slice(1));
@@ -125,6 +186,15 @@ function validateDataSchema(data) {
 }
 
 function bindInteractions() {
+  elements.appNavButtons.forEach((button) => {
+    button.addEventListener('click', () => switchModule(button.dataset.module || 'recipes'));
+  });
+
+  bindItemBrowserInteractions();
+  const itemBrowserScroller = document.querySelector('.item-browser-list-panel');
+  elements.itemBrowserBackToTop?.addEventListener('click', () => {
+    itemBrowserScroller?.scrollTo({ top: 0, behavior: 'smooth' });
+  });
   if (elements.selectedCard) {
     elements.selectedCard.setAttribute('role', 'button');
     elements.selectedCard.setAttribute('tabindex', '0');
@@ -164,8 +234,11 @@ function bindInteractions() {
   elements.search.addEventListener('input', () => updateSearch(elements.search.value));
   elements.search.addEventListener('keydown', handleSearchKeys);
   document.addEventListener('keydown', (event) => {
-    if (event.key === '/' && document.activeElement !== elements.search) {
-      event.preventDefault(); elements.search.focus(); elements.search.select();
+    if (event.key === '/' && document.activeElement !== elements.search && document.activeElement !== elements.itemBrowserSearch) {
+      event.preventDefault();
+      const target = state.ui.activeModule === 'items' ? elements.itemBrowserSearch : elements.search;
+      target?.focus();
+      target?.select();
     }
     if (event.key === 'Escape') closeResults();
   });
@@ -175,6 +248,9 @@ function bindInteractions() {
   window.addEventListener('hashchange', () => {
     const item = state.indexes.byCode.get(normalizeCode(location.hash.slice(1)));
     if (item?.recipe?.length && item.rawCode !== state.ui.selected?.rawCode) selectItem(item, { updateHash: false });
+  });
+  window.addEventListener('popstate', () => {
+    if (state.ui.activeModule === 'items') restoreItemBrowserHistoryState();
   });
   elements.zoomIn.addEventListener('click', () => zoomAt(1.18));
   elements.zoomOut.addEventListener('click', () => zoomAt(1 / 1.18));
@@ -186,6 +262,962 @@ function bindInteractions() {
   elements.viewport.addEventListener('pointercancel', stopDrag);
   elements.viewport.addEventListener('dragstart', (event) => event.preventDefault());
 }
+
+function switchModule(moduleName) {
+  const next = moduleName === 'items' ? 'items' : 'recipes';
+  state.ui.activeModule = next;
+  closeResults();
+  const isItems = next === 'items';
+
+  elements.recipeWorkspace.hidden = isItems;
+  elements.recipeWorkspace.style.display = isItems ? 'none' : '';
+  elements.itemBrowserWorkspace.hidden = !isItems;
+  elements.itemBrowserWorkspace.style.display = isItems ? 'grid' : 'none';
+  document.body.dataset.module = next;
+  if (elements.picker) elements.picker.hidden = isItems;
+  if (elements.layoutSelect) elements.layoutSelect.closest('.layout-control')?.toggleAttribute('hidden', isItems);
+  if (elements.toggleRecipeMap) elements.toggleRecipeMap.hidden = isItems;
+
+  elements.appNavButtons.forEach((button) => {
+    const active = button.dataset.module === next;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+
+  if (isItems) {
+    renderItemBrowser();
+    requestAnimationFrame(() => elements.itemBrowserSearch?.focus());
+  }
+}
+
+function populateSelect(select, values, placeholder) {
+  if (!select) return;
+  select.replaceChildren();
+  const first = document.createElement('option');
+  first.value = '';
+  first.textContent = placeholder;
+  select.append(first);
+  values.forEach((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    select.append(option);
+  });
+}
+
+function populateDatalist(list, values) {
+  if (!list) return;
+  list.replaceChildren();
+  values.forEach((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    list.append(option);
+  });
+}
+
+function textIncludes(haystack, needle) {
+  const query = normalizeText(needle);
+  return !query || normalizeText(haystack).includes(query);
+}
+
+function renderItemBrowserClassFilters(classes) {
+  const container = elements.itemBrowserClassList;
+  if (!container) return;
+  container.replaceChildren();
+  classes.forEach((className) => {
+    const label = document.createElement('label');
+    label.className = 'item-browser-class-chip';
+    const input = document.createElement('input');
+    input.type = 'checkbox'; input.value = className; input.title = `Filter to items available to the ${className} class.`;
+    input.checked = state.ui.itemBrowser.classNames.includes(className);
+    input.addEventListener('change', () => {
+      state.ui.itemBrowser.classNames = [...container.querySelectorAll('input:checked')].map((node) => node.value);
+      commitItemBrowserQuery();
+    });
+    const text = document.createElement('span'); text.textContent = className;
+    label.append(input, text); container.append(label);
+  });
+}
+
+function bindItemBrowserInteractions() {
+  const f = state.ui.itemBrowser;
+  const set = (key, value) => { f[key] = value; commitItemBrowserQuery(); };
+  const inputBindings = [
+    [elements.itemBrowserMainStat, (v) => set('mainStat', v)],
+    [elements.itemBrowserLevelMin, (v) => set('levelMin', v)],
+    [elements.itemBrowserLevelMax, (v) => set('levelMax', v)],
+  ];
+  inputBindings.forEach(([el, fn]) => {
+    const apply = () => fn(el.value);
+    el?.addEventListener('input', apply);
+    el?.addEventListener('change', apply);
+  });
+  elements.itemBrowserSearch?.addEventListener('input', () => {
+    f.query = elements.itemBrowserSearch.value;
+    commitItemBrowserQuery(true, false, 'replace');
+    clearTimeout(itemBrowserHistory.queryTimer);
+    itemBrowserHistory.queryTimer = setTimeout(() => commitItemBrowserQuery(false, false, 'push'), 450);
+  });
+  elements.itemBrowserSearch?.addEventListener('blur', () => {
+    clearTimeout(itemBrowserHistory.queryTimer);
+    commitItemBrowserQuery(false, false, 'push');
+  });
+  elements.itemBrowserSearch?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && state.ui.itemBrowser.instantSearch === false) { event.preventDefault(); executeItemBrowserSearch(); }
+  });
+  elements.itemBrowserExecute?.addEventListener('click', executeItemBrowserSearch);
+  elements.itemBrowserInstant?.addEventListener('change', () => {
+    f.instantSearch = elements.itemBrowserInstant.checked;
+    if (f.instantSearch) executeItemBrowserSearch();
+    else { syncItemBrowserControls(); updateItemBrowserUrlState(); }
+  });
+  [
+    [elements.itemBrowserCategory, 'category'], [elements.itemBrowserQuality, 'quality'],
+    [elements.itemBrowserSlot, 'slot'],
+  ].forEach(([el, key]) => el?.addEventListener('change', () => set(key, el.value)));
+
+    elements.itemBrowserFullClear?.addEventListener('click', fullClearItemBrowser);
+  elements.itemBrowserSort?.addEventListener('change', () => { f.sort = elements.itemBrowserSort.value; f.sortDirection = defaultSortDirection(f.sort); commitItemBrowserQuery(); });
+  elements.itemBrowserSortDirection?.addEventListener('change', () => { f.sortDirection = elements.itemBrowserSortDirection.value; commitItemBrowserQuery(); });
+
+  elements.itemBrowserAddStatGroup?.addEventListener('click', () => {
+    f.statGroups.push({ type: 'and', filters: [{ name: '', operator: 'gte', value: '', max: '' }] });
+    renderItemBrowserStatFilters(state.indexes.playerFacing);
+    commitItemBrowserQuery(false, true, 'push');
+  });
+
+  document.querySelectorAll('[data-item-obtained]').forEach((el) => el.addEventListener('change', () => {
+    f.obtainedBy = [...document.querySelectorAll('[data-item-obtained]:checked')].map((x) => x.value);
+    commitItemBrowserQuery();
+  }));
+  document.querySelectorAll('[data-item-relation]').forEach((el) => {
+    const key = el.dataset.itemRelation;
+    const event = el.type === 'checkbox' ? 'change' : 'input';
+    el.addEventListener(event, () => { f.relations[key] = el.type === 'checkbox' ? el.checked : el.value; commitItemBrowserQuery(); });
+  });
+  document.querySelector('#item-browser-search-mode')?.addEventListener('change', () => set('searchMode', document.querySelector('#item-browser-search-mode').value));
+  document.querySelector('#item-browser-view')?.addEventListener('change', () => set('view', document.querySelector('#item-browser-view').value));
+  document.querySelector('#item-browser-save')?.addEventListener('click', saveItemBrowserQuery);
+  document.querySelector('#item-browser-copy-link')?.addEventListener('click', copyItemBrowserLink);
+}
+
+function commitItemBrowserQuery(renderStats = true, force = false, historyMode = 'push') {
+  syncItemBrowserControls();
+  if (!state.ui.itemBrowser.instantSearch && !force) return;
+  updateItemBrowserUrlState(historyMode);
+  if (renderStats) renderItemBrowserStatFilters(state.indexes.playerFacing);
+  renderItemBrowser();
+}
+
+function executeItemBrowserSearch(historyMode = 'push') {
+  updateItemBrowserUrlState(historyMode);
+  renderItemBrowserStatFilters(state.indexes.playerFacing);
+  renderItemBrowser();
+}
+
+
+
+function fullClearItemBrowser() {
+  clearTimeout(itemBrowserHistory.queryTimer);
+  const defaults = createDefaultItemBrowserQuery();
+  Object.assign(state.ui.itemBrowser, defaults);
+  syncItemBrowserControls();
+  renderItemBrowserStatFilters(state.indexes.playerFacing);
+  executeItemBrowserSearch('push');
+}
+
+
+function ensureItemBrowserSortOption(sort) {
+  const select = elements.itemBrowserSort;
+  if(!select || !String(sort||'').startsWith('stat:')) return;
+  const key = String(sort).slice(5);
+  const exists = [...select.options].some(option => option.value === sort);
+  if(exists) return;
+  const info = getStatInfo(state.indexes.playerFacing,key);
+  if(!info.exists) return;
+  const option=document.createElement('option');
+  option.value=sort;
+  option.textContent=info.name || key;
+  select.append(option);
+}
+
+function syncItemBrowserControls() {
+  const f = state.ui.itemBrowser;
+  if (elements.itemBrowserMainStat) elements.itemBrowserMainStat.value = f.mainStat || 'strength';
+  if (elements.itemBrowserSearch) elements.itemBrowserSearch.value = f.query;
+  if (elements.itemBrowserCategory) elements.itemBrowserCategory.value = f.category;
+  if (elements.itemBrowserQuality) elements.itemBrowserQuality.value = f.quality;
+  if (elements.itemBrowserSlot) elements.itemBrowserSlot.value = f.slot;
+  if (elements.itemBrowserLevelMin) elements.itemBrowserLevelMin.value = f.levelMin;
+  if (elements.itemBrowserLevelMax) elements.itemBrowserLevelMax.value = f.levelMax;
+  ensureItemBrowserSortOption(f.sort);
+  if (elements.itemBrowserSort) elements.itemBrowserSort.value = f.sort;
+  if (elements.itemBrowserSortDirection) { elements.itemBrowserSortDirection.innerHTML = sortDirectionOptions(f.sort); elements.itemBrowserSortDirection.value = f.sortDirection || defaultSortDirection(f.sort); }
+  document.querySelector('#item-browser-search-mode')?.setAttribute('value', f.searchMode);
+  if (document.querySelector('#item-browser-search-mode')) document.querySelector('#item-browser-search-mode').value = f.searchMode;
+  if (elements.itemBrowserInstant) elements.itemBrowserInstant.checked = f.instantSearch !== false;
+  if (document.querySelector('#item-browser-view')) document.querySelector('#item-browser-view').value = f.view;
+  document.querySelectorAll('[data-item-obtained]').forEach((el) => { el.checked = f.obtainedBy.includes(el.value); });
+  document.querySelectorAll('[data-item-relation]').forEach((el) => { const v=f.relations[el.dataset.itemRelation]; if (el.type==='checkbox') el.checked=Boolean(v); else el.value=v || ''; });
+  elements.itemBrowserClassList?.querySelectorAll('input').forEach((input) => { input.checked = f.classNames.includes(input.value); });
+}
+
+const PSEUDO_STAT_DEFS = [
+  { name: 'Total to Agility', key: 'total-agi' },
+  { name: 'Total to Strength', key: 'total-str' },
+  { name: 'Total to Intelligence', key: 'total-int' },
+  { name: 'Total to All Stats', key: 'total-all' },
+  { name: 'Total Sum of All Stats', key: 'total-sum' },
+];
+const MAIN_STAT_NAMES = Object.freeze({ strength: 'Strength', agility: 'Agility', intelligence: 'Intelligence' });
+function rawStatValue(item, name) { return parseItemStats(item).filter(s => normalizeText(s.name) === normalizeText(name) && s.numeric && Number.isFinite(s.value)).reduce((sum, s) => sum + Number(s.value), 0); }
+function getPseudoStatValues(item, mainStat = state.ui.itemBrowser.mainStat || 'strength') {
+  const agi=rawStatValue(item,'Agility'), str=rawStatValue(item,'Strength'), int=rawStatValue(item,'Intelligence'), all=rawStatValue(item,'All Stats'), main=rawStatValue(item,'Main Stat');
+  const totals={agility:agi+all,strength:str+all,intelligence:int+all};
+  if(mainStat==='agility') totals.agility+=main; else if(mainStat==='intelligence') totals.intelligence+=main; else totals.strength+=main;
+  return {'total-agi':totals.agility,'total-str':totals.strength,'total-int':totals.intelligence,'total-all':Math.min(totals.agility,totals.strength,totals.intelligence),'total-sum':totals.agility+totals.strength+totals.intelligence};
+}
+function getPseudoStatDefinition(name) { const k=normalizeText(name||''); return PSEUDO_STAT_DEFS.find(s=>normalizeText(s.name)===k)||null; }
+function isActiveAbilityMarker(line) { return /^\s*\[active\]\s+/i.test(String(line||'')) || /^\s*(?:active ability|ability)\s*:/i.test(String(line||'')); }
+function isPassiveAbilityMarker(line) { return /^\s*\[passive\]\s+/i.test(String(line||'')) || /^\s*passive ability\s*:/i.test(String(line||'')); }
+function isAbilityMarker(line) { return isActiveAbilityMarker(line)||isPassiveAbilityMarker(line); }
+function extractAbilities(item) {
+  if (!item) return [];
+  const cached = state.cache.abilities.get(item);
+  if (cached) return cached;
+  const lines=String(item?.plainExtendedTooltip||'').split(/\r?\n/).map(x=>x.trim()), abilities=[];
+  for(let i=0;i<lines.length;i++){ const marker=lines[i]; if(!isAbilityMarker(marker)) continue; const active=isActiveAbilityMarker(marker); const name=marker.replace(/^\[(?:active|passive)\]\s*/i,'').replace(/^(?:active ability|passive ability|ability)\s*:\s*/i,'').trim(); const block=[]; for(let j=i+1;j<lines.length;j++){const line=lines[j];if(!line||isAbilityMarker(line)||/^provides\s*:/i.test(line))break;block.push(line);if(/^cooldown\s*:/i.test(line))break;} abilities.push({type:active?'active':'passive',name:name||marker,lines:block}); i+=block.length; }
+  if(Array.isArray(item?.scriptBehaviors)) item.scriptBehaviors.forEach(entry=>{const text=typeof entry==='string'?entry.trim():String(entry?.name||entry?.description||'').trim();if(/^\[active\]/i.test(text))abilities.push({type:'active',name:text.replace(/^\[active\]\s*/i,'').trim(),lines:[]});else if(/^\[passive\]/i.test(text))abilities.push({type:'passive',name:text.replace(/^\[passive\]\s*/i,'').trim(),lines:[]});});
+  const seen=new Set();
+  const result = abilities.filter(a=>{const k=`${a.type}|${normalizeText(a.name)}`;if(seen.has(k))return false;seen.add(k);return true;});
+  state.cache.abilities.set(item, result);
+  return result;
+}
+function extractActiveAbilities(item){return extractAbilities(item).filter(a=>a.type==='active').map(a=>[`[Active] ${a.name}`,...a.lines]);}
+function getNonAbilityProvidesLines(item){ const lines=extractTooltipSection(String(item?.plainExtendedTooltip||''),'Provides:'), abilities=extractAbilities(item), blocked=new Set(abilities.flatMap(a=>[a.name,...a.lines]).map(x=>normalizeText(x))); return lines.filter(line=>!blocked.has(normalizeText(String(line).trim()))&&!isAbilityMarker(line)); }
+function canonicalizeDynamicStat(line){
+  const text=String(line||'').replace(/^[-•]\s*/,'').trim();
+  if(!text || /^[+\-]?\d+(?:\.\d+)?\s*%?\s+\S/.test(text)) return null;
+  const matches=[...text.matchAll(/\d+(?:\.\d+)?/g)];
+  if(matches.length!==1) return null;
+  const match=matches[0], value=Number(match[0]);
+  if(!Number.isFinite(value)) return null;
+  const name=`${text.slice(0,match.index)}#${text.slice(match.index+match[0].length)}`.replace(/\s+/g,' ').trim();
+  return {name,value,unit:'number',numeric:true,pseudo:false,originalName:text};
+}
+function parseItemStats(item){
+  if (!item) return [];
+  const cached = state.cache.parsedStats.get(item);
+  if (cached) return cached;
+  const lines=[...getNonAbilityProvidesLines(item)];
+  if(Array.isArray(item?.scriptStats)) lines.push(...item.scriptStats.map(e=>typeof e==='string'?e:JSON.stringify(e)).filter(x=>!isAbilityMarker(x)));
+  const result = lines.map(line=>{
+    const dynamic=canonicalizeDynamicStat(line);
+    if(dynamic)return {...dynamic,dynamic:true};
+    const text=String(line).trim();
+    const m=text.match(/^([+\-]?\d+(?:\.\d+)?)\s*(%)?\s+(.+)$/);
+    if(m)return{name:m[3].trim(),value:Number(m[1]),percent:Boolean(m[2]),numeric:true,pseudo:false};
+    return{name:text.replace(/^[-•]\s*/,'').trim(),value:null,percent:false,numeric:false,pseudo:false};
+  }).filter(x=>x.name);
+  state.cache.parsedStats.set(item, result);
+  return result;
+}
+function classifySimpleStat(name) {
+  const n = normalizeText(name);
+  // Attribute stats have their own group. They are not "general" just because
+  // they are universal; the dedicated Attributes section keeps the readout
+  // consistent with the pseudo-stat model.
+  if (/^(?:strength|agility|intelligence|all stats|main stat)$/.test(n)) return 'attributes';
+
+  // Defensive means the stat primarily improves survival, mitigation or
+  // resistance. Keep "damage taken" here even though it contains "damage".
+  const defensive = [
+    /\barmor\b/, /\bdefen[cs]e\b/, /\bdamage taken\b/, /\bdamage reduction\b/,
+    /\bspell damage reduction\b/, /\bmagic(?:al)? resistance\b/, /\bresistance\b/,
+    /\bresist\b/, /\bevasion\b/, /\bblock(?: chance)?\b/, /\bdodge\b/,
+    /\bhealth\b/, /\bhp\b/, /\blife\b/, /\bshield\b/, /\bbarrier\b/,
+    /\bhealth regeneration\b/, /\blife regeneration\b/, /\bhealing\b/, /\bheal(?:s|ing)?\b/,
+    /\btenacity\b/, /\bslow resistance\b/, /\bstatus resistance\b/,
+    /\bcrowd control resistance\b/, /\bcc resistance\b/, /\bimmunity\b/
+  ];
+  if (defensive.some(re => re.test(n))) return 'defensive';
+
+  // Offensive means the stat directly improves damage output, attack cadence
+  // or offensive penetration. Movement/range/resource stats stay general.
+  const offensive = [
+    /\bdamage\b/, /\battack speed\b/, /\bcritical(?: strike)?\b/, /\bcrit(?:ical)?\b/,
+    /\blife steal\b/, /\blifesteal\b/, /\bspell power\b/, /\bability power\b/,
+    /\battack power\b/, /\bcast speed\b/, /\bhaste\b/, /\bpenetration\b/,
+    /\barmor penetration\b/, /\bmagic penetration\b/, /\baccuracy\b/,
+    /\blethality\b/, /\bspell damage\b/, /\bability damage\b/, /\bdamage dealt\b/,
+    /\bphysical damage\b/, /\bmagical damage\b/, /\battack range\b/
+  ];
+  if (offensive.some(re => re.test(n))) return 'offensive';
+
+  // General / utility covers movement, resources, cooldowns and other stats
+  // that are useful but are not intrinsically offensive or defensive.
+  return 'general';
+}
+function getStatCatalog(items){
+  if (items === state.indexes.playerFacing && state.cache.statCatalog) return state.cache.statCatalog;
+  const map=new Map();
+  const add=(name,data)=>{const k=normalizeText(name);if(k&&!map.has(k))map.set(k,{name,...data});};
+  PSEUDO_STAT_DEFS.forEach(st=>add(st.name,{kind:'pseudo',numeric:true,pseudoKey:st.key,group:'pseudo',subtype:'simple'}));
+  META_STAT_DEFS.forEach(st=>add(st.name,{kind:'meta',numeric:st.numeric,metaKey:st.key,group:'meta',subtype:st.numeric?'simple':'presence'}));
+  const dynamicValues=new Map();
+  items.forEach(item=>parseItemStats(item).forEach(st=>{
+    if(st.dynamic){
+      if(!dynamicValues.has(st.name)) dynamicValues.set(st.name,new Set());
+      dynamicValues.get(st.name).add(st.value);
+    }
+  }));
+  const validatedDynamicNames=new Set([...dynamicValues.entries()].filter(([,values])=>values.size>=2).map(([name])=>name));
+  if(items===state.indexes.playerFacing) state.cache.dynamicStatNames=validatedDynamicNames;
+  items.forEach(item=>{
+    parseItemStats(item).forEach(st=>{
+      const dynamicValid=st.dynamic && validatedDynamicNames.has(st.name);
+      const displayName=dynamicValid ? st.name : (st.originalName || st.name);
+      add(displayName,{kind:'simple',numeric:dynamicValid || (!st.dynamic && st.numeric),group:(dynamicValid || (!st.dynamic && st.numeric))?classifySimpleStat(displayName):'general',subtype:dynamicValid?'dynamic':((!st.dynamic && st.numeric)?'simple':'presence'),dynamic:dynamicValid,canonicalName:dynamicValid?st.name:null});
+    });
+    extractAbilities(item).forEach(a=>add(a.name,{kind:a.type,numeric:false,group:a.type,subtype:'presence'}));
+  });
+  const kindRank={pseudo:0,simple:1,passive:2,active:3,meta:4};
+  const groupRank={pseudo:0,general:0,defensive:1,offensive:2,passive:0,active:0,meta:0};
+  const subtypeRank={simple:0,dynamic:1,presence:2};
+  const result = [...map.values()].sort((a,b)=>
+    (kindRank[a.kind]-kindRank[b.kind])||
+    ((groupRank[a.group]??0)-(groupRank[b.group]??0))||
+    ((subtypeRank[a.subtype]??0)-(subtypeRank[b.subtype]??0))||
+    a.name.localeCompare(b.name)
+  );
+  if (items === state.indexes.playerFacing) state.cache.statCatalog = result;
+  return result;
+}
+const META_STAT_DEFS = [
+  { name:'Number of defensive stats', key:'defensive-count', kind:'meta', numeric:true },
+  { name:'Number of offensive stats', key:'offensive-count', kind:'meta', numeric:true },
+  { name:'Number of passive abilities', key:'passive-count', kind:'meta', numeric:true },
+  { name:'Number of active abilities', key:'active-count', kind:'meta', numeric:true },
+  { name:'Has passive ability', key:'has-passive', kind:'meta', numeric:false },
+  { name:'Has active ability', key:'has-active', kind:'meta', numeric:false },
+  { name:'Has aura', key:'has-aura', kind:'meta', numeric:false },
+];
+function getMetaStatValue(item,key){
+  const stats=parseItemStats(item);
+  const abilities=extractAbilities(item);
+  if(key==='defensive-count') return new Set(stats.filter(s=>classifySimpleStat(s.name)==='defensive').map(s=>normalizeText(s.name))).size;
+  if(key==='offensive-count') return new Set(stats.filter(s=>classifySimpleStat(s.name)==='offensive').map(s=>normalizeText(s.name))).size;
+  if(key==='passive-count') return abilities.filter(a=>a.type==='passive').length;
+  if(key==='active-count') return abilities.filter(a=>a.type==='active').length;
+  if(key==='has-passive') return abilities.some(a=>a.type==='passive')?1:0;
+  if(key==='has-active') return abilities.some(a=>a.type==='active')?1:0;
+  if(key==='has-aura'){
+    if(!isPlayerFacing(item)) return 0;
+    // Aura is a gameplay property only when it is explicitly present in the
+    // item's Provides: section. Names/descriptions and ability labels are not
+    // enough: cosmetic items such as "Aura of the Fallen One" must remain 0.
+    const provides = extractTooltipSection(String(item?.plainExtendedTooltip || ''), 'Provides:');
+    return provides.some(line => /\baura\b/i.test(String(line))) ? 1 : 0;
+  }
+  return 0;
+}
+function getMetaStatDefinition(name){const k=normalizeText(name||'');return META_STAT_DEFS.find(s=>normalizeText(s.name)===k)||null;}
+function getStatInfo(items,name){const k=normalizeText(name||'');if(!k)return{exists:false,numeric:false,kind:'unknown'};const pseudo=getPseudoStatDefinition(name);if(pseudo)return{exists:true,numeric:true,kind:'pseudo',pseudoKey:pseudo.key};const meta=getMetaStatDefinition(name);if(meta)return{exists:true,numeric:meta.numeric,kind:'meta',metaKey:meta.key};const found=getStatCatalog(items).find(s=>normalizeText(s.name)===k);return found?{...found,exists:true}:{exists:false,numeric:false,kind:'unknown'};}
+function getStatPresenceAndValue(item,name){
+  const pseudo=getPseudoStatDefinition(name);
+  if(pseudo){const value=getPseudoStatValues(item)[pseudo.key];return{present:Number.isFinite(value),value:Number.isFinite(value)?value:0};}
+  const meta=getMetaStatDefinition(name);
+  if(meta){const value=getMetaStatValue(item,meta.key);return{present:meta.numeric?Number.isFinite(value):value===1,value:Number.isFinite(value)?value:0};}
+  const k=normalizeText(name||'');
+  const info=getStatInfo(state.indexes.playerFacing,name);
+  const canonical=info?.canonicalName;
+  const stats=parseItemStats(item).filter(st=>normalizeText(st.name)===(canonical||k));
+  const numeric=stats.filter(st=>st.numeric&&Number.isFinite(st.value));
+  if(numeric.length)return{present:true,value:Math.max(...numeric.map(st=>st.value))};
+  if(extractAbilities(item).some(a=>normalizeText(a.name)===k))return{present:true,value:1};
+  return{present:stats.length>0,value:stats.length?1:0};
+}
+function statFilterMatches(item,filter){if(!filter?.name)return false;const stat=getStatPresenceAndValue(item,filter.name);if(!stat.present)return false;const info=getStatInfo(state.indexes.playerFacing,filter.name);if(!info.numeric)return true;const min=filter.min===''||filter.min==null?null:Number(filter.min),max=filter.max===''||filter.max==null?null:Number(filter.max),target=filter.value===''||filter.value==null?null:Number(filter.value),op=filter.operator||'gte';if(min!=null&&stat.value<min)return false;if(max!=null&&stat.value>max)return false;if(target==null||!Number.isFinite(target))return true;if(op==='gte')return stat.value>=target;if(op==='lte')return stat.value<=target;if(op==='eq')return stat.value===target;if(op==='gt')return stat.value>target;if(op==='lt')return stat.value<target;return true;}
+function weightedStatResult(item,group){const filters=(group.filters||[]).filter(f=>f.name);let score=0;const reasons=[];for(const filter of filters){const info=getStatInfo(state.indexes.playerFacing,filter.name);const stat=getStatPresenceAndValue(item,filter.name);const min=filter.min===''||filter.min==null?null:Number(filter.min),max=filter.max===''||filter.max==null?null:Number(filter.max);if(info.numeric){if(min!=null&&stat.value<min)return{matched:false,score:0,reason:`${filter.name}: value is below minimum`};if(max!=null&&stat.value>max)return{matched:false,score:0,reason:`${filter.name}: value is above maximum`};}const w=Number(filter.weight);const weight=Number.isFinite(w)?w:0;const contribution=stat.value*weight;score+=contribution;reasons.push(`${filter.name}: ${stat.value} × ${weight} = ${formatNumber(contribution)}`);}const minSum=group.minSum===''||group.minSum==null?null:Number(group.minSum),maxSum=group.maxSum===''||group.maxSum==null?null:Number(group.maxSum);return{matched:(minSum==null||score>=minSum)&&(maxSum==null||score<=maxSum),score,reason:`Weighted sum ${formatNumber(score)}${minSum!=null?` ≥ ${minSum}`:''}${maxSum!=null?` ≤ ${maxSum}`:''}`,contributions:reasons};}
+function evaluateStatGroup(item,group){
+  const filters=(group.filters||[]).filter(f=>f.name);
+  if(!filters.length)return{matched:true,score:0,reason:'',details:[]};
+  if(group.type==='weight'){
+    const e=weightedStatResult(item,group);
+    return {...e,details:e.contributions||[]};
+  }
+  const details=[];
+  const matches=filters.map(f=>{const m=statFilterMatches(item,f);const s=getStatPresenceAndValue(item,f.name);details.push(`${f.name}: ${s.present?(s.value===1&&!getStatInfo(state.indexes.playerFacing,f.name).numeric?'present':formatNumber(s.value)):'absent'} — ${m?'passed':'failed'}`);return m;});
+  if(group.type==='not'){const matched=matches.some(Boolean);return{matched:!matched,score:0,reason:matched?'At least one forbidden condition matched.':'No forbidden condition matched.',details};}
+  if(group.type==='if'){const ok=filters.every((f,i)=>!getStatPresenceAndValue(item,f.name).present||matches[i]);return{matched:ok,score:0,reason:ok?'Every present optional stat satisfies its range.':'A present optional stat failed its range.',details};}
+  if(group.type==='count'){const count=matches.filter(Boolean).length,min=group.min===''||group.min==null?0:Number(group.min),max=group.max===''||group.max==null?Infinity:Number(group.max);const ok=count>=min&&count<=max;return{matched:ok,score:0,reason:`COUNT matched ${count} of ${filters.length}; required ${min}${Number.isFinite(max)?`–${max}`:'+'}.`,details};}
+  const ok=matches.every(Boolean);return{matched:ok,score:0,reason:ok?'Every condition matched.':'At least one condition failed.',details};
+}
+function renderItemBrowserStatFilters(items){
+  const container=elements.itemBrowserStatList;if(!container)return;container.replaceChildren();const catalog=getStatCatalog(items);
+  const labels={and:'AND — all',not:'NOT — none',count:'COUNT — how many',if:'IF — when present',weight:'WEIGHT — weighted sum'};const help={and:'Every listed condition must match. Presence-only stats require existence; numeric stats can use a value.',not:'None of the listed conditions may match.',count:'Count how many listed conditions match and constrain that count.',if:'If the stat exists, it must satisfy the condition. If absent, the item passes.',weight:'Numeric stats contribute value × weight. Presence-only stats contribute 1 when present and 0 when absent. The weighted sum is checked against the threshold.'};
+  state.ui.itemBrowser.statGroups.forEach((group,gi)=>{const card=document.createElement('section');card.className=`item-browser-stat-group item-browser-stat-group-${group.type}`;const head=document.createElement('div');head.className='item-browser-stat-group-heading';const type=document.createElement('select');type.className='item-browser-stat-group-type';type.title='Choose the logic for this stat group.';Object.entries(labels).forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;o.selected=group.type===v;type.append(o);});type.addEventListener('change',()=>{group.type=type.value;commitItemBrowserQuery(true);});const title=document.createElement('div');title.className='item-browser-stat-group-title';title.textContent=labels[group.type];title.title=help[group.type];const remove=document.createElement('button');remove.type='button';remove.className='item-browser-remove-group';remove.textContent='×';remove.title='Remove this entire stat group';remove.setAttribute('aria-label',remove.title);remove.addEventListener('click',()=>{state.ui.itemBrowser.statGroups.splice(gi,1);commitItemBrowserQuery(true);});head.append(type,title,remove);card.append(head);
+    if(group.type==='count'){const range=document.createElement('div');range.className='item-browser-stat-group-range';const label=document.createElement('span');label.textContent='Matched conditions';const min=document.createElement('input');min.type='number';min.min='0';min.step='1';min.placeholder='Min';min.value=group.min??'';min.title='Minimum number of conditions that must match.';const dash=document.createElement('b');dash.textContent='–';const max=document.createElement('input');max.type='number';max.min='0';max.step='1';max.placeholder='Max';max.value=group.max??'';max.title='Maximum number of conditions that may match.';const sync=()=>{group.min=min.value;group.max=max.value;commitItemBrowserQuery(false)};min.addEventListener('input',sync);max.addEventListener('input',sync);range.append(label,min,dash,max);card.append(range);}
+    if(group.type==='weight'){const range=document.createElement('div');range.className='item-browser-weight-controls';const label=document.createElement('span');label.textContent='Weighted sum threshold';label.title='Minimum is the activation threshold. Maximum is optional.';const min=document.createElement('input');min.type='number';min.step='any';min.placeholder='Minimum';min.value=group.minSum??'';min.title='Minimum weighted sum required for an item to match.';const max=document.createElement('input');max.type='number';max.step='any';max.placeholder='Maximum (optional)';max.value=group.maxSum??'';max.title='Optional maximum weighted sum.';const sync=()=>{group.minSum=min.value;group.maxSum=max.value;commitItemBrowserQuery(false)};min.addEventListener('input',sync);max.addEventListener('input',sync);range.append(label,min,max);card.append(range);const hint=document.createElement('p');hint.className='item-browser-stat-group-hint';hint.textContent='Numeric → actual value × weight. Presence-only → 1 if present, 0 if absent.';card.append(hint);}
+    const list=document.createElement('div');list.className='item-browser-stat-filter-list';group.filters=Array.isArray(group.filters)&&group.filters.length?group.filters:[{name:'',operator:'gte',value:'',min:'',max:'',weight:1}];group.filters.forEach((filter,fi)=>{const row=document.createElement('div');row.className='item-browser-stat-row';const picker=document.createElement('div');picker.className='item-browser-stat-picker';const input=document.createElement('input');input.type='search';input.autocomplete='off';input.placeholder='Search stat…';input.value=filter.name||'';input.title='Search stats. Ranking: pseudo-stats → simple stats → passives → actives.';const menu=document.createElement('div');menu.className='item-browser-stat-menu';menu.hidden=true;let highlighted=-1;const options=()=>{const q=normalizeText(input.value);return catalog.filter(s=>!q||normalizeText(s.name).includes(q));};const renderMenu=()=>{menu.replaceChildren();const opts=options();let last='';const groupNames={pseudo:'Pseudo-stats',general:'General / universal',defensive:'Defensive',offensive:'Offensive',passive:'Passive abilities',active:'Active abilities',meta:'Meta-stats'};opts.forEach((st,i)=>{const section=st.group||st.kind;if(section!==last){const h=document.createElement('div');h.className='item-browser-stat-menu-group';h.textContent=groupNames[section]||section;menu.append(h);last=section;}const b=document.createElement('button');b.type='button';b.className='item-browser-stat-option';b.textContent=st.name;const m=document.createElement('small');m.textContent=st.numeric?'numeric':'presence';b.append(m);b.addEventListener('mousedown',e=>{e.preventDefault();selectOption(st);});menu.append(b);});menu.hidden=!opts.length;input.setAttribute('aria-expanded',String(!menu.hidden));};const selectOption=st=>{filter.name=st.name;filter.statKind=st.kind;filter.numeric=st.numeric;input.value=st.name;menu.hidden=true;input.setAttribute('aria-expanded','false');renderItemBrowserStatFilters(items);commitItemBrowserQuery(true);};input.addEventListener('input',renderMenu);input.addEventListener('focus',renderMenu);input.addEventListener('keydown',e=>{const opts=[...menu.querySelectorAll('.item-browser-stat-option')];if(e.key==='ArrowDown'){e.preventDefault();highlighted=Math.min(highlighted+1,opts.length-1);opts.forEach((o,i)=>o.classList.toggle('highlighted',i===highlighted));}else if(e.key==='ArrowUp'){e.preventDefault();highlighted=Math.max(0,highlighted-1);opts.forEach((o,i)=>o.classList.toggle('highlighted',i===highlighted));}else if(e.key==='Enter'&&highlighted>=0){e.preventDefault();opts[highlighted]?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));}else if(e.key==='Escape'){menu.hidden=true;input.setAttribute('aria-expanded','false');}});input.addEventListener('blur',()=>setTimeout(()=>{menu.hidden=true;input.setAttribute('aria-expanded','false');},0));picker.append(input,menu);row.append(picker);
+      const info=getStatInfo(items,filter.name);if(group.type==='weight'){const min=document.createElement('input');min.type='number';min.step='any';min.placeholder=info.numeric?'Min value':'Presence';min.value=info.numeric?(filter.min??''):'';min.disabled=Boolean(filter.name&&!info.numeric);min.title=info.numeric?'Optional minimum numeric value.':'Presence-only: value is automatically 1/0.';const max=document.createElement('input');max.type='number';max.step='any';max.placeholder='Max value';max.value=info.numeric?(filter.max??''):'';max.disabled=Boolean(filter.name&&!info.numeric);max.title='Optional maximum numeric value.';const weight=document.createElement('input');weight.type='number';weight.step='any';weight.placeholder='Weight';weight.value=filter.weight??1;weight.title='Multiplier. Presence-only stats are 1 when present and 0 when absent.';min.addEventListener('input',()=>{filter.min=min.value;commitItemBrowserQuery(false)});max.addEventListener('input',()=>{filter.max=max.value;commitItemBrowserQuery(false)});weight.addEventListener('input',()=>{filter.weight=weight.value;commitItemBrowserQuery(false)});row.append(min,max,weight);}else if(info.exists&&!info.numeric){const presence=document.createElement('span');presence.className='item-browser-stat-presence';presence.textContent='Presence';presence.title='Checks only whether this stat exists on the item.';row.append(presence);}else{const op=document.createElement('select');op.title='Numeric comparison.';[['gte','≥'],['lte','≤'],['eq','='],['gt','>'],['lt','<']].forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;o.selected=(filter.operator||'gte')===v;op.append(o);});op.addEventListener('change',()=>{filter.operator=op.value;commitItemBrowserQuery(false)});const value=document.createElement('input');value.type='number';value.step='any';value.placeholder='Value';value.value=filter.value??'';value.title='Target numeric value.';value.addEventListener('input',()=>{filter.value=value.value;commitItemBrowserQuery(false)});const max=document.createElement('input');max.type='number';max.step='any';max.placeholder='Max';max.value=filter.max??'';max.title='Optional upper bound.';max.addEventListener('input',()=>{filter.max=max.value;commitItemBrowserQuery(false)});row.append(op,value,max);}const del=document.createElement('button');del.type='button';del.className='item-browser-remove-filter';del.textContent='×';del.title='Remove this stat condition';del.addEventListener('click',()=>{group.filters.splice(fi,1);commitItemBrowserQuery(true)});row.append(del);list.append(row);});card.append(list);const add=document.createElement('button');add.type='button';add.className='item-browser-add-filter';add.textContent='+ Add stat condition';add.title=group.type==='weight'?'Add another stat to the weighted sum.':'Add another condition to this group.';add.addEventListener('click',()=>{group.filters.push({name:'',operator:'gte',value:'',min:'',max:'',weight:1});commitItemBrowserQuery(true)});card.append(add);container.append(card);});
+}
+function extractShopNames(item) {
+  const shops = Array.isArray(item?.shops) ? item.shops : [];
+  return shops.flatMap((entry) => {
+    if (typeof entry === 'string') return [entry];
+    if (!entry || typeof entry !== 'object') return [];
+    return [entry.name, entry.shopName, entry.shop, entry.vendor].filter(Boolean).map(String);
+  });
+}
+
+function getItemCategory(item) {
+  if (isWearableItem(item)) return 'Equipment';
+  const text = [item.slot, item.description, item.plainExtendedTooltip, item.rawExtendedTooltip].filter(Boolean).join(' ').toLowerCase();
+  if (/\btool\b|tool type:/i.test(text)) return 'Tool';
+  if (/\b(?:event )?cosmetic\b/i.test(text)) return 'Cosmetic';
+  if (/\b(?:consumable|food|potion)\b/i.test(text)) return 'Consumable';
+  if (/\bmaterial\b/i.test(text)) return 'Material';
+  return 'Other';
+}
+
+function isWearableItem(item) {
+  const slot = String(item?.slot || '').trim();
+  return ['Weapon', 'Armor', 'Boots', 'Wings', 'Essence', 'Accessory'].includes(slot);
+}
+
+function applyItemBrowserHints() {
+  const hints = {
+    '#item-browser-search': 'Search player-facing items by name, description, tooltip, item type or raw code. Full search also applies the advanced filters below.',
+    '#item-browser-search-mode': 'Quick search uses only the text query. Full search combines the text query with facets, relations and stat groups.',
+    '#item-browser-category': 'Limit results to an item category.',
+    '#item-browser-quality': 'Limit results to a specific item quality.',
+    '#item-browser-slot': 'Limit results to wearable equipment slots: Weapon, Armor, Boots, Wings, Essence or Accessory.',
+    '#item-browser-level-min': 'Minimum required level. Leave blank for no lower bound.',
+    '#item-browser-level-max': 'Maximum required level. Leave blank for no upper bound.',
+    '#item-browser-sort': 'Choose how matching items are ordered.',
+    '#item-browser-view': 'Choose the amount of information shown in each result row.',
+    '#item-browser-save': 'Save the current Item Browser query in local browser storage.',
+    '#item-browser-copy-link': 'Copy a URL containing the complete current Item Browser query.',
+    '#item-browser-full-clear': 'Reset the entire Item Browser query and return every control to its default state.',
+    '#item-browser-add-stat-group': 'Add an advanced stat group. Groups are combined with AND.',
+  };
+  Object.entries(hints).forEach(([selector, title]) => document.querySelector(selector)?.setAttribute('title', title));
+  document.querySelectorAll('[data-item-obtained]').forEach((el) => el.title = `Require the item to be obtainable by ${el.value === 'craft' ? 'crafting' : el.value === 'drop' ? 'monster drop' : 'shop purchase'}.`);
+}
+
+function initializeItemBrowser() {
+  const items = state.indexes.playerFacing;
+  const uniqueValues = (values) => [...new Set(values.filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b)));
+  populateSelect(elements.itemBrowserCategory, uniqueValues(items.map(getItemCategory)), 'All categories');
+  populateSelect(elements.itemBrowserQuality, uniqueValues(items.map(i=>i.quality)), 'All qualities');
+  populateSelect(elements.itemBrowserSlot, uniqueValues(items.filter(isWearableItem).map(i=>i.slot)), 'All wearable slots');
+  renderItemBrowserClassFilters(uniqueValues(items.flatMap(i=>Array.isArray(i.allowedClasses)?i.allowedClasses:[])));
+  applyItemBrowserHints();
+  populateDatalist(document.querySelector('#item-browser-item-options'), uniqueValues(items.map(i=>i.name)));
+  populateDatalist(document.querySelector('#item-browser-enemy-options'), uniqueValues(state.data.enemies.map(e=>e.name)));
+  populateDatalist(document.querySelector('#item-browser-shop-options'), uniqueValues(items.flatMap(extractShopNames)));
+  restoreItemBrowserUrlState();
+  itemBrowserHistory.lastCommitted = serializeItemBrowserQuery();
+  renderItemBrowserStatFilters(items);
+  renderItemBrowser();
+  const selected = state.indexes.byCode.get(state.ui.itemBrowser.selectedCode);
+  if (selected) renderItemDetails(selected, elements.itemBrowserDetails);
+}
+
+function normalizeItemBrowserQuery(raw = {}) {
+  const defaults = createDefaultItemBrowserQuery();
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const query = { ...defaults, ...source };
+  query.mainStat = ['strength', 'agility', 'intelligence'].includes(query.mainStat) ? query.mainStat : defaults.mainStat;
+  query.searchMode = query.searchMode === 'quick' ? 'quick' : 'full';
+  query.instantSearch = query.instantSearch !== false;
+  query.classNames = Array.isArray(query.classNames) ? query.classNames.filter(Boolean).map(String) : [];
+  query.obtainedBy = Array.isArray(query.obtainedBy) ? query.obtainedBy.filter((v) => ['craft', 'drop', 'shop'].includes(v)) : [];
+  query.relations = { ...defaults.relations, ...(source.relations && typeof source.relations === 'object' ? source.relations : {}) };
+  query.relations.usedIn = Boolean(query.relations.usedIn);
+  query.statGroups = Array.isArray(query.statGroups) ? query.statGroups : [];
+  query.statGroups = query.statGroups.map((group) => ({
+    type: ['and', 'not', 'count', 'if', 'weight'].includes(group?.type) ? group.type : 'and',
+    filters: Array.isArray(group?.filters) ? group.filters.map((filter) => ({
+      name: typeof filter?.name === 'string' ? filter.name : '',
+      operator: ['gte', 'lte', 'eq', 'gt', 'lt'].includes(filter?.operator) ? filter.operator : 'gte',
+      value: filter?.value ?? '',
+      min: filter?.min ?? '',
+      max: filter?.max ?? '',
+      weight: filter?.weight ?? 1,
+    })) : [],
+    min: group?.min ?? '',
+    max: group?.max ?? '',
+    minSum: group?.minSum ?? group?.min ?? '',
+    maxSum: group?.maxSum ?? group?.max ?? '',
+  }));
+  const legacySort = String(query.sort || '');
+  if (legacySort === 'relevance') { query.sort = 'match'; query.sortDirection = 'desc'; }
+  else if (legacySort === 'name-asc') { query.sort = 'name'; query.sortDirection = 'asc'; }
+  else if (legacySort === 'name-desc') { query.sort = 'name'; query.sortDirection = 'desc'; }
+  else if (legacySort === 'level-asc') { query.sort = 'level'; query.sortDirection = 'asc'; }
+  else if (legacySort === 'level-desc') { query.sort = 'level'; query.sortDirection = 'desc'; }
+  else if (legacySort === 'quality-desc') { query.sort = 'quality'; query.sortDirection = 'desc'; }
+  else if (legacySort === 'slot-asc') { query.sort = 'slot'; query.sortDirection = 'asc'; }
+  const baseSorts = ['match','name','level','quality','category','slot','recipe-count','usage-count','drop-sources','shop-count'];
+  query.sort = (baseSorts.includes(query.sort) || String(query.sort).startsWith('stat:')) ? query.sort : defaults.sort;
+  query.sortDirection = ['asc','desc'].includes(query.sortDirection) ? query.sortDirection : defaultSortDirection(query.sort);
+  query.view = ['compact', 'detailed', 'summary', 'full', 'superwide'].includes(query.view) ? query.view : defaults.view;
+  if (query.view === 'summary') query.view = 'compact';
+  if (query.view === 'full' || query.view === 'superwide') query.view = 'detailed';
+  query.selectedCode = typeof query.selectedCode === 'string' ? query.selectedCode : '';
+  query.whyCode = typeof query.whyCode === 'string' ? query.whyCode : '';
+  return query;
+}
+
+function restoreItemBrowserUrlState() {
+  const params = new URLSearchParams(location.search);
+  const raw = params.get('itemQuery');
+  if (raw) {
+    try {
+      const q=normalizeItemBrowserQuery(JSON.parse(raw));
+      Object.assign(state.ui.itemBrowser, q);
+    } catch { /* ignore malformed shared state */ }
+  } else {
+    // Backward compatibility with the previous Item Browser URL format.
+    state.ui.itemBrowser.mainStat=params.get('mainStat')||'strength';
+    state.ui.itemBrowser.query=params.get('itemSearch')||'';
+    state.ui.itemBrowser.category=params.get('itemCategory')||'';
+    state.ui.itemBrowser.quality=params.get('itemQuality')||'';
+    state.ui.itemBrowser.slot=params.get('itemSlot')||'';
+    state.ui.itemBrowser.classNames=(params.get('itemClass')||'').split(',').filter(Boolean);
+    state.ui.itemBrowser.levelMin=params.get('itemLevelMin')||''; state.ui.itemBrowser.levelMax=params.get('itemLevelMax')||'';
+    state.ui.itemBrowser.obtainedBy=[params.get('craftable')==='1'?'craft': '',params.get('droppable')==='1'?'drop':'',params.get('purchasable')==='1'?'shop':''].filter(Boolean);
+    state.ui.itemBrowser.relations={craftedFrom:params.get('craftedFrom')||'',craftsInto:params.get('craftsInto')||'',usedIn:params.get('usedIn')==='1',dropsFrom:params.get('dropSource')||'',dropCountMin:params.get('dropCountMin')||'',dropCountMax:params.get('dropCountMax')||'',soldBy:params.get('shopSource')||'',shopCountMin:params.get('shopCountMin')||'',shopCountMax:params.get('shopCountMax')||''};
+    const legacy=params.get('itemStatGroups'); if(legacy){try{state.ui.itemBrowser.statGroups=JSON.parse(legacy)||[]}catch{}}
+    state.ui.itemBrowser.sort=params.get('itemSort')||'relevance'; state.ui.itemBrowser.selectedCode=params.get('itemSelected')||'';
+  }
+  Object.assign(state.ui.itemBrowser, normalizeItemBrowserQuery(state.ui.itemBrowser));
+  syncItemBrowserControls();
+}
+
+function serializeItemBrowserQuery() {
+  const f=state.ui.itemBrowser;
+  return JSON.stringify({mainStat:f.mainStat||'strength',query:f.query,searchMode:f.searchMode,instantSearch:f.instantSearch!==false,category:f.category,quality:f.quality,slot:f.slot,classNames:f.classNames,levelMin:f.levelMin,levelMax:f.levelMax,obtainedBy:f.obtainedBy,relations:f.relations,statGroups:f.statGroups,sort:f.sort,sortDirection:f.sortDirection,view:f.view,selectedCode:f.selectedCode});
+}
+function updateItemBrowserUrlState(historyMode = 'replace') {
+  const params = new URLSearchParams(location.search);
+  const query = serializeItemBrowserQuery();
+  params.set('itemQuery', query);
+  ['mainStat','itemSearch','itemCategory','itemQuality','itemSlot','itemClass','itemLevelMin','itemLevelMax','craftable','droppable','purchasable','usedIn','dropSource','shopSource','dropCountMin','dropCountMax','shopCountMin','shopCountMax','itemStatGroups','itemSort','itemSelected','statMode','statCount','itemStats'].forEach(k=>params.delete(k));
+  const url=`${location.pathname}${params.toString()?`?${params.toString()}`:''}${location.hash}`;
+  if (itemBrowserHistory.restoring) { try { history.replaceState({itemBrowser:true,query},'',url); } catch {} return; }
+  if (historyMode === 'push' && query !== itemBrowserHistory.lastCommitted) {
+    try { history.pushState({itemBrowser:true,query},'',url); } catch {}
+  } else {
+    try { history.replaceState({itemBrowser:true,query},'',url); } catch {}
+  }
+  itemBrowserHistory.lastCommitted = query;
+}
+
+function restoreItemBrowserHistoryState() {
+  itemBrowserHistory.restoring = true;
+  try { restoreItemBrowserUrlState(); renderItemBrowserStatFilters(state.indexes.playerFacing); renderItemBrowser(); } finally { itemBrowserHistory.restoring = false; itemBrowserHistory.lastCommitted = serializeItemBrowserQuery(); }
+}
+
+function getItemBrowserMatchEvaluation(item) {
+  const f = state.ui.itemBrowser;
+  const query = normalizeText(f.query);
+  const searchText = [item.name, item.rawName, item.description, item.plainExtendedTooltip, item.slot, item.rawCode]
+    .filter(Boolean)
+    .join(' ');
+
+  if (query && !textIncludes(searchText, query)) return { matched: false, score: 0, reasons: [] };
+  if (f.searchMode === 'quick') {
+    const raw = String(item.name || '').toLowerCase();
+    return { matched: true, score: query && raw.startsWith(String(f.query || '').toLowerCase()) ? 100 : 0, reasons: query ? ['Quick search: text matched.'] : [] };
+  }
+
+  const reasons = [];
+  const fail = (reason) => ({ matched: false, score: 0, reasons: [...reasons, reason] });
+
+  if (f.category && getItemCategory(item) !== f.category) return fail(`Category: expected ${f.category}.`);
+  if (f.category) reasons.push(`Category: ${f.category}.`);
+  if (f.quality && String(item.quality || '') !== f.quality) return fail(`Quality: expected ${f.quality}.`);
+  if (f.quality) reasons.push(`Quality: ${f.quality}.`);
+  if (f.slot && String(item.slot || '') !== f.slot) return fail(`Wearable slot: expected ${f.slot}.`);
+  if (f.slot) reasons.push(`Wearable slot: ${f.slot}.`);
+  if (!rangeMatch(item.requiredLevel ?? 0, f.levelMin, f.levelMax)) return fail(`Required level: outside ${f.levelMin || 'any'}–${f.levelMax || 'any'}.`);
+  if (f.levelMin || f.levelMax) reasons.push(`Required level: ${f.levelMin || 'any'}–${f.levelMax || 'any'}.`);
+
+  const classes = new Set(Array.isArray(item.allowedClasses) ? item.allowedClasses : []);
+  if (f.classNames.length && !f.classNames.some((name) => classes.has(name))) return fail(`Classes: none of ${f.classNames.join(', ')} are allowed.`);
+  if (f.classNames.length) reasons.push(`Allowed class: ${f.classNames.join(' / ')}.`);
+
+  const hasRecipe = Array.isArray(item.recipe) && item.recipe.length > 0;
+  const usedBy = state.indexes.usedBy.get(itemKey(item)) || [];
+  const drops = extractDropNames(item);
+  const shops = extractShopNames(item).filter(() => isActualShopPurchase(item));
+
+  if (f.obtainedBy.length && !f.obtainedBy.some((kind) => kind === 'craft' ? hasRecipe : kind === 'drop' ? drops.length > 0 : shops.length > 0)) {
+    return fail(`Obtained by: item has none of ${f.obtainedBy.join(', ')}.`);
+  }
+  if (f.obtainedBy.length) reasons.push(`Obtained by: ${f.obtainedBy.join(' + ')}.`);
+
+  const r = f.relations;
+  if (r.usedIn && !usedBy.length) return fail('Used in recipes: no recorded recipe usage.');
+  if (r.usedIn) reasons.push(`Used in recipes: ${usedBy.length} recipe${usedBy.length === 1 ? '' : 's'}.`);
+  if (r.craftedFrom && !item.recipe?.some((part) => textIncludes(part?.item?.name || part?.name || '', r.craftedFrom))) return fail(`Crafted from: recipe does not contain “${r.craftedFrom}”.`);
+  if (r.craftedFrom) reasons.push(`Crafted from: recipe contains “${r.craftedFrom}”.`);
+  if (r.craftsInto && !usedBy.some((entry) => textIncludes(entry?.item?.name || entry?.name || '', r.craftsInto))) return fail(`Crafts into: no target matches “${r.craftsInto}”.`);
+  if (r.craftsInto) reasons.push(`Crafts into: target matches “${r.craftsInto}”.`);
+  if (r.dropsFrom && !drops.some((name) => textIncludes(name, r.dropsFrom))) return fail(`Drops from: no source matches “${r.dropsFrom}”.`);
+  if (r.dropsFrom) reasons.push(`Drops from: source matches “${r.dropsFrom}”.`);
+  if (!rangeMatch(drops.length, r.dropCountMin, r.dropCountMax)) return fail(`Drop sources: ${drops.length} is outside the requested range.`);
+  if (r.dropCountMin || r.dropCountMax) reasons.push(`Drop sources: ${drops.length}.`);
+  if (r.soldBy && !shops.some((name) => textIncludes(name, r.soldBy))) return fail(`Sold by: no shop matches “${r.soldBy}”.`);
+  if (r.soldBy) reasons.push(`Sold by: shop matches “${r.soldBy}”.`);
+  if (!rangeMatch(shops.length, r.shopCountMin, r.shopCountMax)) return fail(`Shops: ${shops.length} is outside the requested range.`);
+  if (r.shopCountMin || r.shopCountMax) reasons.push(`Shops: ${shops.length}.`);
+
+  let score = 0;
+  for (const group of f.statGroups) {
+    const evaluation = evaluateStatGroup(item, group);
+    if (!evaluation.matched) return fail(`${group.type.toUpperCase()}: ${evaluation.reason || 'group failed.'}`);
+    score += evaluation.score || 0;
+    if (evaluation.reason) reasons.push(`${group.type.toUpperCase()}: ${evaluation.reason}`);
+    if (evaluation.details?.length) reasons.push(...evaluation.details.map((detail) => `${group.type.toUpperCase()}: ${detail}`));
+  }
+
+  if (query) reasons.unshift(`Text: “${f.query}” matched the searchable item text.`);
+  return { matched: true, score, reasons };
+}
+
+function defaultSortDirection(sort) {
+  return getItemBrowserSortType(sort) === 'text' ? 'asc' : 'desc';
+}
+function getItemBrowserSortType(sort) {
+  if (sort === 'name' || sort === 'category' || sort === 'slot') return 'text';
+  if (sort === 'match' || sort === 'level' || sort === 'quality' || sort === 'recipe-count' || sort === 'usage-count' || sort === 'drop-sources' || sort === 'shop-count') return 'numeric';
+  if (sort.startsWith('stat:')) {
+    const info = getStatInfo(state.indexes.playerFacing, sort.slice(5));
+    return info.numeric ? 'numeric' : 'presence';
+  }
+  return 'presence';
+}
+function sortDirectionOptions(sort) {
+  const type = getItemBrowserSortType(sort);
+  if (type === 'text') return '<option value="asc">A → Z</option><option value="desc">Z → A</option>';
+  if (type === 'numeric') return '<option value="desc">High → low</option><option value="asc">Low → high</option>';
+  return '<option value="desc">Present → absent</option><option value="asc">Absent → present</option>';
+}
+function getItemBrowserSortValue(entry, sort) {
+  const item = entry.item;
+  if (sort === 'match') return entry.score;
+  if (sort === 'name') return String(item.name || '');
+  if (sort === 'level') return Number.isFinite(Number(item.requiredLevel)) ? Number(item.requiredLevel) : null;
+  if (sort === 'quality') return ({ Normal:0, Common:1, Uncommon:2, Rare:3, Epic:4, Legendary:5, Mythic:6, Mythical:6 }[item.quality] ?? -1);
+  if (sort === 'category') return getItemCategory(item);
+  if (sort === 'slot') return String(item.slot || '');
+  if (sort === 'recipe-count') return Array.isArray(item.recipe) ? item.recipe.length : 0;
+  if (sort === 'usage-count') return (state.indexes.usedBy.get(itemKey(item)) || []).length;
+  if (sort === 'drop-sources') return extractDropNames(item).length;
+  if (sort === 'shop-count') return extractShopNames(item).filter(() => isActualShopPurchase(item)).length;
+  if (sort.startsWith('stat:')) {
+    const name = sort.slice(5);
+    const info = getStatInfo(state.indexes.playerFacing, name);
+    const value = getStatPresenceAndValue(item, name);
+    if (!value.present) return null;
+    return info.numeric ? value.value : 1;
+  }
+  return null;
+}
+function compareNullable(a, b, direction, text = false) {
+  const aMissing = a == null || (text && String(a) === '');
+  const bMissing = b == null || (text && String(b) === '');
+  if (aMissing || bMissing) {
+    if (aMissing && bMissing) return 0;
+    return aMissing ? 1 : -1; // missing values always last
+  }
+  const cmp = text ? String(a).localeCompare(String(b)) : Number(a) - Number(b);
+  return direction === 'asc' ? cmp : -cmp;
+}
+function getItemBrowserMatches() {
+  const f = state.ui.itemBrowser;
+  const matches = state.indexes.playerFacing
+    .map((item) => ({ item, ...getItemBrowserMatchEvaluation(item) }))
+    .filter((entry) => entry.matched);
+  const direction = f.sortDirection || defaultSortDirection(f.sort);
+  const textSort = ['name','category','slot'].includes(f.sort);
+  matches.sort((a, b) => {
+    let primary;
+    if (getItemBrowserSortType(f.sort) === 'presence') {
+      const statName = f.sort.slice(5);
+      const av = f.sort.startsWith('stat:') && getStatPresenceAndValue(a.item, statName).present ? 1 : 0;
+      const bv = f.sort.startsWith('stat:') && getStatPresenceAndValue(b.item, statName).present ? 1 : 0;
+      primary = direction === 'desc' ? bv - av : av - bv;
+    } else {
+      primary = compareNullable(getItemBrowserSortValue(a, f.sort), getItemBrowserSortValue(b, f.sort), direction, textSort);
+    }
+    return primary || String(a.item.name || '').localeCompare(String(b.item.name || ''));
+  });
+  return matches;
+}
+
+function getSearchableResultStats(item) {
+  const stats = [];
+  const seen = new Set();
+  const push = (entry) => {
+    const key = normalizeText(entry.name);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    stats.push(entry);
+  };
+  parseItemStats(item).forEach(st => {
+    if (!st.name) return;
+    const info = getStatInfo(state.indexes.playerFacing, st.name);
+    push({
+      name: st.name,
+      value: st.numeric && Number.isFinite(st.value) ? st.value : 1,
+      numeric: Boolean(st.numeric),
+      percent: Boolean(st.percent),
+      kind: 'stat',
+      group: info.group || classifySimpleStat(st.name),
+      subtype: st.numeric ? (st.dynamic ? 'dynamic' : 'simple') : 'presence',
+      dynamic: Boolean(st.dynamic && info.dynamic),
+      sortKey: info.canonicalName || st.name,
+    });
+  });
+  PSEUDO_STAT_DEFS.forEach(def => {
+    const value = getPseudoStatValues(item)[def.key];
+    if (Number.isFinite(value) && value !== 0) push({name:def.name,value,numeric:true,percent:false,kind:'pseudo',group:'attributes',subtype:'simple'});
+  });
+  META_STAT_DEFS.forEach(def => {
+    const value = getMetaStatValue(item, def.key);
+    if (def.numeric || value > 0) push({name:def.name,value,numeric:def.numeric,percent:false,kind:'meta',group:'meta',subtype:def.numeric?'simple':'presence'});
+  });
+  return stats;
+}
+
+function resultStatGroups(stats) {
+  const labels = {
+    attributes:'Attributes',
+    general:'General',
+    defensive:'Defensive',
+    offensive:'Offensive',
+    passive:'Passive abilities',
+    active:'Active abilities',
+    meta:'Meta',
+  };
+  const order = ['attributes','general','defensive','offensive','passive','active','meta'];
+  const groups = new Map();
+  stats.forEach(stat => {
+    const key = labels[stat.group] ? stat.group : 'general';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(stat);
+  });
+  return order.filter(key => groups.has(key)).map(key => ({key,label:labels[key],stats:groups.get(key)}));
+}
+
+function createResultStatButton(stat, item) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  const statSortKey = normalizeText(stat.sortKey || stat.name);
+  const activeSortKey = state.ui.itemBrowser.sort.startsWith('stat:') ? state.ui.itemBrowser.sort.slice(5) : '';
+  const isSorted = activeSortKey === statSortKey;
+  button.className = `item-browser-result-stat${stat.matched ? ' matched' : ''}${stat.numeric ? ' numeric' : ' presence'}${isSorted ? ' sorted' : ''}`;
+  button.dataset.sortKey = statSortKey;
+  button.title = stat.numeric ? `Sort results by ${stat.name}.` : `Sort results by whether ${stat.name} is present.`;
+  const displayName = stat.dynamic && String(stat.name).includes('#') ? String(stat.name).replace('#', formatNumber(stat.value)) : stat.name;
+  const value = stat.numeric && !stat.dynamic ? `: ${formatNumber(stat.value)}${stat.percent ? '%' : ''}` : '';
+  button.textContent = `${displayName}${value}`;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const key = stat.sortKey || stat.name;
+    const info = getStatInfo(state.indexes.playerFacing, key);
+    if (!info.exists) return;
+    const normalized = normalizeText(key);
+    if (state.ui.itemBrowser.sort === `stat:${normalized}`) {
+      state.ui.itemBrowser.sortDirection = state.ui.itemBrowser.sortDirection === 'desc' ? 'asc' : 'desc';
+    } else {
+      state.ui.itemBrowser.sort = `stat:${normalized}`;
+      state.ui.itemBrowser.sortDirection = 'desc';
+    }
+    ensureItemBrowserSortOption(state.ui.itemBrowser.sort);
+    syncItemBrowserControls();
+    updateItemBrowserUrlState('push');
+    renderItemBrowser();
+  });
+  return button;
+}
+
+function getDetailedResultStats(item, activeStatNames) {
+  const raw = getSearchableResultStats(item).filter(st => st.kind === 'stat').map(st => {
+    if(st.dynamic && st.sortKey && st.sortKey !== st.name) return {...st,name:st.sortKey};
+    return st;
+  });
+  const searched = [];
+  const seen = new Set(raw.map(st => normalizeText(st.name)));
+  const pushSearched = (stat) => {
+    const key = normalizeText(stat.name);
+    if (!key || seen.has(key) || !activeStatNames.has(key)) return;
+    seen.add(key);
+    searched.push(stat);
+  };
+  PSEUDO_STAT_DEFS.forEach(def => {
+    const key = normalizeText(def.name);
+    if (!activeStatNames.has(key)) return;
+    const value = getPseudoStatValues(item)[def.key];
+    pushSearched({name:def.name,value,numeric:true,percent:false,kind:'pseudo',group:'attributes',subtype:'simple'});
+  });
+  META_STAT_DEFS.forEach(def => {
+    const key = normalizeText(def.name);
+    if (!activeStatNames.has(key)) return;
+    const value = getMetaStatValue(item, def.key);
+    pushSearched({name:def.name,value:def.numeric ? value : value > 0 ? 1 : 0,numeric:def.numeric,percent:false,kind:'meta',group:'meta',subtype:def.numeric?'simple':'presence'});
+  });
+  return [...raw, ...searched];
+}
+
+function renderResultStatGroups(item, activeStatNames) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'item-browser-result-stat-groups';
+  const stats = getDetailedResultStats(item, activeStatNames).map(st => ({...st, matched: activeStatNames.has(normalizeText(st.sortKey || st.name)), sortKey:st.sortKey || st.name}));
+  resultStatGroups(stats).forEach(group => {
+    const section = document.createElement('section');
+    section.className = 'item-browser-result-stat-group';
+    const heading = document.createElement('h4');
+    heading.textContent = group.label;
+    section.append(heading);
+    const list = document.createElement('div');
+    list.className = 'item-browser-result-stat-lines';
+    group.stats.forEach(stat => {
+      const line = document.createElement('div');
+      line.className = `item-browser-result-stat-line${stat.matched ? ' matched' : ''}`;
+      line.append(createResultStatButton(stat, item));
+      list.append(line);
+    });
+    section.append(list);
+    wrapper.append(section);
+  });
+  return wrapper;
+}
+
+function renderResultAbilityGroups(item) {
+  const abilities = extractAbilities(item);
+  if (!abilities.length) return null;
+  const wrapper = document.createElement('section');
+  wrapper.className = 'item-browser-result-ability-groups';
+  const heading = document.createElement('h4');
+  heading.textContent = 'Abilities';
+  wrapper.append(heading);
+  const list = document.createElement('div');
+  list.className = 'item-browser-result-ability-lines';
+  abilities.forEach(ability => {
+    const line = document.createElement('div');
+    line.className = `item-browser-result-ability-line ${ability.type}`;
+    const type = document.createElement('span'); type.className = 'item-browser-result-ability-type'; type.textContent = ability.type === 'active' ? 'Active' : 'Passive';
+    const name = document.createElement('button'); name.type='button'; name.className='item-browser-result-ability-name'; name.textContent=ability.name; name.title=`Sort results by presence of ${ability.name}.`;
+    name.addEventListener('click', event => {
+      event.stopPropagation();
+      const normalized = normalizeText(ability.name);
+      const same = state.ui.itemBrowser.sort === `stat:${normalized}`;
+      state.ui.itemBrowser.sort = `stat:${normalized}`;
+      state.ui.itemBrowser.sortDirection = same ? (state.ui.itemBrowser.sortDirection === 'desc' ? 'asc' : 'desc') : 'desc';
+      ensureItemBrowserSortOption(state.ui.itemBrowser.sort);
+      syncItemBrowserControls(); updateItemBrowserUrlState('push'); renderItemBrowser();
+    });
+    line.append(type,name);
+    if (ability.lines?.length) {
+      const details = document.createElement('div'); details.className='item-browser-result-ability-details';
+      ability.lines.forEach(text => { const p=document.createElement('div'); p.textContent=text; details.append(p); });
+      line.append(details);
+    }
+    list.append(line);
+  });
+  wrapper.append(list);
+  return wrapper;
+}
+
+function renderItemBrowserDebug(item, reasons, score) {
+  const box = document.createElement('section');
+  box.className = 'item-browser-match-debug';
+  const heading = document.createElement('div'); heading.className='item-browser-match-debug-heading';
+  const title=document.createElement('strong'); title.textContent='Matched filters';
+  const scoreEl=document.createElement('span'); scoreEl.textContent=`Score ${formatNumber(score)}`;
+  heading.append(title,scoreEl); box.append(heading);
+  const list=document.createElement('div'); list.className='item-browser-match-debug-list';
+  reasons.forEach((reason,index)=>{const line=document.createElement('div');line.className='item-browser-match-debug-line';const n=document.createElement('span');n.textContent=`${index+1}.`;const text=document.createElement('span');text.textContent=reason;line.append(n,text);list.append(line);});
+  if (!reasons.length) { const empty=document.createElement('div'); empty.className='item-browser-match-debug-empty'; empty.textContent='No explicit filter conditions; the item matched the current search context.'; list.append(empty); }
+  box.append(list);
+  return box;
+}
+
+function renderItemBrowser() {
+  document.querySelector('.item-browser-filter-deck')?.classList.toggle('quick-hidden', state.ui.itemBrowser.searchMode === 'quick');
+  const container=elements.itemBrowserResults; if(!container)return;
+  const matches=getItemBrowserMatches(); const f=state.ui.itemBrowser;
+  if(elements.itemBrowserCount)elements.itemBrowserCount.textContent=`${matches.length} result${matches.length===1?'':'s'}`;
+  container.className=`item-browser-results item-browser-view-${f.view}`; container.replaceChildren();
+  renderItemBrowserSummary();
+  if(!matches.length){const e=document.createElement('div');e.className='item-browser-empty';e.innerHTML='<strong>No matching items</strong><span>Try removing a condition or switching to Quick Search.</span>';container.append(e);return;}
+  const activeStatNames = new Set(f.statGroups.flatMap(g => (g.filters || []).map(x => normalizeText(x.name)).filter(Boolean)));
+  matches.forEach(({item,score,reasons})=>{
+    const row=document.createElement('article'); row.className=`item-browser-result-row${itemKey(item)===f.selectedCode?' selected':''}`; row.dataset.code=itemKey(item);
+    const main=document.createElement('div'); main.className='item-browser-result-main'; main.setAttribute('role','option'); main.setAttribute('tabindex','0'); main.setAttribute('aria-selected',String(itemKey(item)===f.selectedCode));
+    main.append(createIcon(item,'item-browser-icon'));
+    const copy=document.createElement('span'); copy.className='item-browser-copy';
+    const title=document.createElement('strong'); title.textContent=item.name||'Unnamed item';
+    const subtitle=document.createElement('small'); subtitle.textContent=itemSummary(item);
+    const tags=document.createElement('span'); tags.className='item-browser-result-tags';
+    [getItemCategory(item),item.quality,item.slot,item.requiredLevel?`Lv ${item.requiredLevel}`:''].filter(Boolean).forEach(t=>{const x=document.createElement('span');x.textContent=t;tags.append(x)});
+    const statStrip=document.createElement('span'); statStrip.className='item-browser-result-stats';
+    const summaryStats=getSearchableResultStats(item).slice(0,3).map(st=>({...st,matched:activeStatNames.has(normalizeText(st.name)),sortKey:st.name}));
+    summaryStats.forEach(st=>statStrip.append(createResultStatButton(st,item)));
+    const abilities=extractAbilities(item); if(abilities.length){const x=document.createElement('span');x.className='item-browser-result-ability-badge';x.textContent=`${abilities.length} ability${abilities.length===1?'':'ies'}`;x.title=abilities.map(a=>`${a.type}: ${a.name}`).join('\n');statStrip.append(x)}
+    copy.append(title,subtitle,tags,statStrip); main.append(copy);
+    const side=document.createElement('span'); side.className='item-browser-result-side'; const scoreEl=document.createElement('b'); scoreEl.textContent=`Match ${formatNumber(score)}`; scoreEl.title='Match score from the active query.'; side.append(scoreEl);
+    const counts=[]; if(item.recipe?.length)counts.push(`Craft ×${item.recipe.length}`); const used=state.indexes.usedBy.get(itemKey(item))||[]; if(used.length)counts.push(`Used ×${used.length}`); const drops=extractDropNames(item); if(drops.length)counts.push(`Drop ×${drops.length}`); const shops=extractShopNames(item).filter(()=>isActualShopPurchase(item)); if(shops.length)counts.push(`Shop ×${shops.length}`); const rel=document.createElement('small'); rel.textContent=counts.join(' · ')||'No recorded relations'; side.append(rel); main.append(side);
+    main.addEventListener('click',(event)=>{ if(event.target.closest('.item-browser-result-stat')) return; selectItemBrowserItem(item); }); main.addEventListener('keydown',(event)=>{ if((event.key==='Enter'||event.key===' ')&&!event.target.closest('.item-browser-result-stat')){ event.preventDefault(); selectItemBrowserItem(item); } }); row.append(main);
+    if(f.view==='detailed') {
+      row.append(renderResultStatGroups(item,activeStatNames));
+      const abilityGroups = renderResultAbilityGroups(item);
+      if (abilityGroups) row.append(abilityGroups);
+    }
+    if(f.whyCode===itemKey(item)) row.append(renderItemBrowserDebug(item,reasons,score));
+    const whyBtn=document.createElement('button'); whyBtn.type='button'; whyBtn.className='item-browser-why-button'; whyBtn.textContent=f.whyCode===itemKey(item)?'Hide matched filters':'Matched filters'; whyBtn.title='Open the detailed search-evaluation debug information for this item.'; whyBtn.addEventListener('click',e=>{e.stopPropagation();f.whyCode=f.whyCode===itemKey(item)?'':itemKey(item);renderItemBrowser();}); row.append(whyBtn);
+    container.append(row);
+  });
+}
+
+function renderItemBrowserSummary(){
+  const box=document.querySelector('#item-browser-summary'); if(!box)return; box.replaceChildren(); const f=state.ui.itemBrowser; const chips=[];
+  const add=(label,clear)=>{const b=document.createElement('button');b.type='button';b.className='item-browser-query-chip';b.innerHTML=`<span>${escapeHtml(label)}</span><b>×</b>`;b.addEventListener('click',clear);chips.push(b)};
+  if(f.query)add(`“${f.query}”`,()=>{f.query='';commitItemBrowserQuery()}); if(f.category)add(f.category,()=>{f.category='';commitItemBrowserQuery()}); if(f.quality)add(f.quality,()=>{f.quality='';commitItemBrowserQuery()}); if(f.slot)add(f.slot,()=>{f.slot='';commitItemBrowserQuery()});
+  f.classNames.forEach(c=>add(c,()=>{f.classNames=f.classNames.filter(x=>x!==c);commitItemBrowserQuery()})); f.obtainedBy.forEach(c=>add(`Obtained: ${c}`,()=>{f.obtainedBy=f.obtainedBy.filter(x=>x!==c);commitItemBrowserQuery()}));
+  const r=f.relations; [['Crafted from',r.craftedFrom,'craftedFrom'],['Crafts into',r.craftsInto,'craftsInto'],['Drops from',r.dropsFrom,'dropsFrom'],['Sold by',r.soldBy,'soldBy']].forEach(([l,v,k])=>{if(v)add(`${l}: ${v}`,()=>{r[k]='';commitItemBrowserQuery()})});
+  f.statGroups.forEach((g,i)=>{const n=(g.filters||[]).filter(x=>x.name).length;if(n)add(`${g.type.toUpperCase()} ×${n}`,()=>{f.statGroups.splice(i,1);commitItemBrowserQuery()})});
+  box.append(...chips); if(!chips.length){const p=document.createElement('span');p.className='item-browser-summary-empty';p.textContent='No filters — showing all player-facing items.';box.append(p)}
+}
+
+function selectItemBrowserItem(item){if(!item)return;state.ui.itemBrowser.selectedCode=itemKey(item);renderItemBrowser();renderItemDetails(item,elements.itemBrowserDetails);updateItemBrowserUrlState();}
+
+function saveItemBrowserQuery(){try{localStorage.setItem('hellfire.itemBrowserQuery',JSON.stringify(state.ui.itemBrowser));}catch{} }
+function copyItemBrowserLink(){updateItemBrowserUrlState();navigator.clipboard?.writeText(location.href).then(()=>{const b=document.querySelector('#item-browser-copy-link');if(b){const old=b.textContent;b.textContent='Copied';setTimeout(()=>b.textContent=old,900)}}).catch(()=>{});}
+
+function extractDropNames(item) {
+  const drops = Array.isArray(item?.monsterDrops) ? item.monsterDrops : [];
+  return drops.flatMap((entry) => {
+    if (typeof entry === 'string') return [entry];
+    if (!entry || typeof entry !== 'object') return [];
+    return [entry.name, entry.enemyName, entry.enemy, entry.monster].filter(Boolean).map(String);
+  });
+}
+
+function rangeMatch(value, minRaw, maxRaw) {
+  const valueNum = Number(value);
+  if (!Number.isFinite(valueNum)) return minRaw === '' && maxRaw === '';
+  const min = minRaw === '' ? null : Number(minRaw);
+  const max = maxRaw === '' ? null : Number(maxRaw);
+  return (min === null || (Number.isFinite(min) && valueNum >= min)) && (max === null || (Number.isFinite(max) && valueNum <= max));
+}
+
 
 function getSearchMode() {
   return elements.searchMode?.value || 'crafting';
@@ -572,6 +1604,7 @@ function createNodeControls(item, listItem, children) {
 
   rootButton.addEventListener('click', (event) => {
     event.stopPropagation();
+    switchModule('recipes');
     selectItem(item);
     scrollTreeIntoViewOnMobile();
   });
@@ -713,8 +1746,8 @@ function renderBranch(item, context = {}) {
   return listItem;
 }
 
-function showItemDetails(item) {
-  if (!item || !elements.itemDetails) return;
+function showItemDetails(item, target = elements.itemDetails) {
+  if (!item || !target) return;
 
   // Highlight the item that is currently being inspected.
   document.querySelectorAll('.node-card.details-selected').forEach((node) => {
@@ -726,7 +1759,7 @@ function showItemDetails(item) {
     }
   });
 
-  renderItemDetails(item);
+  renderItemDetails(item, target);
 }
 
 function escapeHtml(value) {
@@ -753,6 +1786,10 @@ function buildIndexes() {
   state.indexes.enemiesByName = buildNameIndex(state.data.enemies);
   state.indexes.shopsByName = buildShopIndex(state.data.items);
   state.indexes.usedBy = buildUsedByIndex();
+  state.indexes.playerFacing = state.data.items.filter(isPlayerFacing);
+  state.cache.parsedStats = new WeakMap();
+  state.cache.abilities = new WeakMap();
+  state.cache.statCatalog = null;
 
   state.data.craftedItems = state.data.items
     .filter((item) => item.recipe?.length && isPlayerFacing(item))
@@ -771,7 +1808,7 @@ function buildSearchEntries() {
   const shops = [...state.indexes.shopsByName.values()]
     .filter((shop) => shop.purchasableItems?.length)
     .map((shop) => ({ type: 'shop', entity: shop, name: shop.name }));
-  const playerItems = state.data.items.filter(isPlayerFacing);
+  const playerItems = state.indexes.playerFacing;
   const allItems = state.data.items;
 
   // Everything is the player-facing union of items, enemies and usable shops.
@@ -815,8 +1852,8 @@ function buildNameIndex(items) {
   return index;
 }
 
-function isActualShopPurchase(item) {
-  if (!item) return false;
+function getShopPurchaseSignals(item) {
+  if (!item) return null;
 
   const name = String(item.name || '').trim();
   const rawCode = String(item.rawCode || '').trim();
@@ -824,22 +1861,83 @@ function isActualShopPurchase(item) {
   const purchaseTooltip = String(item.purchaseTooltip || '').trim();
   const tooltip = String(item.rawFields?.utip || '').trim();
   const classType = String(item.rawFields?.icla || '').trim().toLocaleLowerCase();
+  const price = Number(item.rawFields?.igol);
 
-  // Broken/unresolved export records such as I00O are not useful as a
-  // player-facing purchase even if Warcraft marks them Purchasable.
-  if (!name || (name === rawCode && !rawName)) return false;
+  const technicalName =
+    /\(Item\)$/i.test(name) ||
+    /\(Quest\)$/i.test(name) ||
+    /\(Info\)$/i.test(name) ||
+    /\(Teleport\)$/i.test(name) ||
+    /^Return\s*\(/i.test(name);
 
-  // Navigation/category records are not goods.
-  if (/\(Item\)$/i.test(name) || /^Return\s*\(/i.test(name)) return false;
+  const unresolved = !name || (name === rawCode && !rawName);
+  const explicitPurchase =
+    /^Purchase(?:\s|$)/i.test(purchaseTooltip) ||
+    /^Purchase(?:\s|$)/i.test(tooltip);
+  const hasPositivePrice = Number.isFinite(price) && price > 0;
+  const purchasableClass = classType === 'purchasable';
+  const campaignClass = classType === 'campaign';
+  const hasPlayerData = Boolean(
+    item.quality ||
+    item.description ||
+    item.iconFile ||
+    item.recipe?.length ||
+    item.scriptStats && Object.keys(item.scriptStats).length ||
+    item.scriptBehaviors?.length ||
+    item.requiredLevel != null ||
+    item.slot
+  );
 
-  // The strongest signal in the export is an explicit Purchase tooltip.
-  if (/^Purchase(?:\s|$)/i.test(purchaseTooltip)) return true;
-  if (/^Purchase(?:\s|$)/i.test(tooltip)) return true;
+  return {
+    name,
+    unresolved,
+    technicalName,
+    explicitPurchase,
+    hasPositivePrice,
+    purchasableClass,
+    campaignClass,
+    hasPlayerData,
+    classType,
+  };
+}
 
-  // Some shop goods carry Purchasable without the literal Purchase prefix.
-  if (classType === 'purchasable') return true;
+function isTechnicalShopRecord(item) {
+  const signals = getShopPurchaseSignals(item);
+  if (!signals || signals.unresolved) return true;
+
+  // These are shop UI/navigation/quest records, not inventory goods. Their
+  // shop links are still retained in the raw source-backed index.
+  if (signals.technicalName) return true;
+  if (signals.campaignClass) return true;
 
   return false;
+}
+
+function isShopMapItem(item) {
+  if (!item || !Array.isArray(item.shops) || !item.shops.length) return false;
+
+  const signals = getShopPurchaseSignals(item);
+  if (!signals || signals.unresolved || isTechnicalShopRecord(item)) return false;
+
+  // Do not require the generated tooltip to contain the word "Purchase".
+  // Some genuine shop goods (for example Catalytic Soul) have a price and a
+  // normal item definition but a plain item-name tooltip.
+  if (signals.hasPositivePrice) return true;
+  if (signals.explicitPurchase) return true;
+  if (signals.purchasableClass) return true;
+
+  // A source-backed, player-facing item with meaningful item data is a useful
+  // fallback for free/zero-cost goods whose export does not preserve the
+  // purchase tooltip/class marker.
+  if (!signals.campaignClass && signals.hasPlayerData) return true;
+
+  return false;
+}
+
+function isActualShopPurchase(item) {
+  // Keep this semantic helper for filters outside the shop map, but make its
+  // classification source-aware instead of depending on one tooltip prefix.
+  return isShopMapItem(item);
 }
 
 function buildShopIndex(items = []) {
@@ -856,6 +1954,7 @@ function buildShopIndex(items = []) {
           items: [],
           purchasableItems: [],
           itemCodes: new Set(),
+          purchasableCodes: new Set(),
           categories: new Set(),
         });
       }
@@ -866,15 +1965,14 @@ function buildShopIndex(items = []) {
         entry.itemCodes.add(code);
         entry.items.push(item);
       }
-      if (isActualShopPurchase(item) && code) {
-        if (!entry.purchasableItems.some((candidate) =>
-          normalizeCode(candidate.rawCode) === code
-        )) {
-          entry.purchasableItems.push(item);
-        }
-        if (shop.categoryName) {
-          entry.categories.add(String(shop.categoryName));
-        }
+
+      if (isShopMapItem(item) && code && !entry.purchasableCodes.has(code)) {
+        entry.purchasableCodes.add(code);
+        entry.purchasableItems.push(item);
+      }
+
+      if (shop.categoryName && isShopMapItem(item)) {
+        entry.categories.add(String(shop.categoryName));
       }
     }
   }
@@ -884,6 +1982,7 @@ function buildShopIndex(items = []) {
     entry.purchasableItems.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
     entry.categories = [...entry.categories].sort((a, b) => a.localeCompare(b));
     delete entry.itemCodes;
+    delete entry.purchasableCodes;
   }
 
   return index;
@@ -920,8 +2019,8 @@ function formatDropChance(chancePerThousand) {
     : 'Drop chance unknown';
 }
 
-function showShopDetails(shopName) {
-  if (!shopName || !elements.itemDetails) return;
+function showShopDetails(shopName, target = elements.itemDetails) {
+  if (!shopName || !target) return;
 
   document.querySelectorAll('.node-card.details-selected').forEach((node) => {
     node.classList.remove('details-selected');
@@ -958,7 +2057,7 @@ function showShopDetails(shopName) {
 
   const categoryCount = groups.length;
 
-  elements.itemDetails.innerHTML = `
+  target.innerHTML = `
     <div class="shop-detail-header">
       <div class="shop-detail-icon" data-entity-placeholder="S" aria-hidden="true">S</div>
       <div class="details-item-heading">
@@ -1007,23 +2106,23 @@ function showShopDetails(shopName) {
 
   bindItemIconFallbacks(elements.itemDetails);
 
-  elements.itemDetails.querySelector('[data-action="shop-tree"]')?.addEventListener('click', (event) => {
+  target.querySelector('[data-action="shop-tree"]')?.addEventListener('click', (event) => {
     event.stopPropagation();
     showShopTree(name);
     scrollTreeIntoViewOnMobile();
   });
 
-  elements.itemDetails.querySelectorAll('.shop-inventory-row[data-raw-code]').forEach((row) => {
+  target.querySelectorAll('.shop-inventory-row[data-raw-code]').forEach((row) => {
     row.addEventListener('click', (event) => {
       event.stopPropagation();
       const item = state.indexes.byCode.get(normalizeCode(row.dataset.rawCode));
-      if (item) showItemDetails(item);
+      if (item) showItemDetails(item, target);
     });
   });
 }
 
-function showMonsterDetails(monsterName) {
-  if (!monsterName || !elements.itemDetails) return;
+function showMonsterDetails(monsterName, target = elements.itemDetails) {
+  if (!monsterName || !target) return;
 
   document.querySelectorAll('.node-card.details-selected').forEach((node) => node.classList.remove('details-selected'));
 
@@ -1048,7 +2147,7 @@ function showMonsterDetails(monsterName) {
     String(a.item?.name || a.itemName || '').localeCompare(String(b.item?.name || b.itemName || ''))
   );
 
-  elements.itemDetails.innerHTML=`
+  target.innerHTML=`
     <div class="enemy-detail-header">
       <div class="enemy-detail-icon enemy-icon-placeholder" data-entity-placeholder="E" aria-hidden="true">E</div>
       <div class="details-item-heading">
@@ -1105,17 +2204,17 @@ function showMonsterDetails(monsterName) {
 
   bindItemIconFallbacks(elements.itemDetails);
 
-  elements.itemDetails.querySelector('[data-action="enemy-tree"]')?.addEventListener('click', (event) => {
+  target.querySelector('[data-action="enemy-tree"]')?.addEventListener('click', (event) => {
     event.stopPropagation();
     showEnemyTree(enemy?.name || monsterName);
     scrollTreeIntoViewOnMobile();
   });
 
-  elements.itemDetails.querySelectorAll('.enemy-drop-row[data-raw-code]').forEach(row=>{
+  target.querySelectorAll('.enemy-drop-row[data-raw-code]').forEach(row=>{
     row.addEventListener('click',e=>{
       e.stopPropagation();
       const item=state.indexes.byCode.get(normalizeCode(row.dataset.rawCode));
-      if(item) showItemDetails(item);
+      if(item) showItemDetails(item, target);
     });
   });
 }
@@ -1145,9 +2244,9 @@ function createIconMarkup(item,className=''){
   return `<img src="${escapeHtml(item.iconFile)}" alt="" class="${escapeHtml(className)}" loading="lazy" data-item-placeholder="I">`;
 }
 
-function renderItemDetails(item) {
-  if (!elements.itemDetails) return;
-  elements.itemDetails.replaceChildren();
+function renderItemDetails(item, target = elements.itemDetails) {
+  if (!target) return;
+  target.replaceChildren();
 
   const header = document.createElement('div');
   header.className = 'details-item-header';
@@ -1182,13 +2281,14 @@ function renderItemDetails(item) {
   treeButton.title = `Show the crafting tree for ${item.name || 'this item'}`;
   treeButton.addEventListener('click', (event) => {
     event.stopPropagation();
+    switchModule('recipes');
     selectItem(item);
     scrollTreeIntoViewOnMobile();
   });
   heading.append(treeButton);
 
   header.append(heading);
-  elements.itemDetails.append(header);
+  target.append(header);
 
   const tooltip = String(item.plainExtendedTooltip || '').trim();
   const paragraphs = tooltip.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
@@ -1200,7 +2300,7 @@ function renderItemDetails(item) {
     text.className = 'details-description';
     text.textContent = firstParagraph;
     section.append(text);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
   const provides = extractTooltipSection(tooltip, 'Provides:');
@@ -1214,7 +2314,7 @@ function renderItemDetails(item) {
       list.append(li);
     });
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
   const effects = tooltipSectionsExcept(tooltip, new Set(['Provides:', 'Recipe:', 'Quality:', 'Slot:', 'Type:', 'Required Level:', 'Available Classes:', 'Recipe ID:']));
@@ -1224,7 +2324,7 @@ function renderItemDetails(item) {
     pre.className = 'details-text';
     pre.textContent = effects.join('\n');
     section.append(pre);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
   if (item.recipe?.length) {
@@ -1233,7 +2333,7 @@ function renderItemDetails(item) {
     list.className = 'entity-list details-recipe-list';
 
     item.recipe.forEach((ingredient) => {
-      const target = state.indexes.byCode.get(normalizeCode(ingredient.rawCode));
+      const ingredientItem = state.indexes.byCode.get(normalizeCode(ingredient.rawCode));
 
       const row = document.createElement('button');
       row.type = 'button';
@@ -1241,8 +2341,8 @@ function renderItemDetails(item) {
       row.dataset.entityType = 'item';
       row.dataset.rawCode = normalizeCode(ingredient.rawCode);
 
-      if (target) {
-        row.append(createIcon(target, 'entity-row-icon'));
+      if (ingredientItem) {
+        row.append(createIcon(ingredientItem, 'entity-row-icon'));
       } else {
         const placeholder = document.createElement('span');
         placeholder.className = 'details-placeholder entity-row-icon';
@@ -1254,7 +2354,7 @@ function renderItemDetails(item) {
       copy.className = 'entity-row-copy';
 
       const name = document.createElement('strong');
-      name.textContent = target?.name || ingredient.name || ingredient.rawCode || 'Unknown ingredient';
+      name.textContent = ingredientItem?.name || ingredient.name || ingredient.rawCode || 'Unknown ingredient';
       copy.append(name);
 
       const meta = document.createElement('small');
@@ -1268,14 +2368,14 @@ function renderItemDetails(item) {
 
       row.addEventListener('click', (event) => {
         event.stopPropagation();
-        if (target) showItemDetails(target);
+        if (ingredientItem) showItemDetails(ingredientItem, target);
       });
 
       list.append(row);
     });
 
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
   const miningSource = getWorldMiningSource(item);
@@ -1324,13 +2424,13 @@ function renderItemDetails(item) {
       prospectRow.append(prospectCopy);
       prospectRow.addEventListener('click', (event) => {
         event.stopPropagation();
-        showItemDetails(miningSource.prospect);
+        showItemDetails(miningSource.prospect, target);
       });
       list.append(prospectRow);
     }
 
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
   const relatedOre = findOreForProspect(item);
@@ -1358,12 +2458,12 @@ function renderItemDetails(item) {
     row.append(copy);
     row.addEventListener('click', (event) => {
       event.stopPropagation();
-      showItemDetails(relatedOre);
+      showItemDetails(relatedOre, target);
     });
 
     list.append(row);
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
   const usages = recipesUsing(item);
@@ -1392,14 +2492,14 @@ function renderItemDetails(item) {
       row.append(copy);
       row.addEventListener('click', (event) => {
         event.stopPropagation();
-        showItemDetails(product);
+        showItemDetails(product, target);
       });
 
       list.append(row);
     });
 
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
   if (item.scriptStats && Object.keys(item.scriptStats).length) {
@@ -1412,21 +2512,40 @@ function renderItemDetails(item) {
       list.append(li);
     });
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
-  if (item.scriptBehaviors?.length) {
-    const section = detailSection('Behaviors');
-    const list = document.createElement('ul');
-    list.className = 'details-stat-list';
-    item.scriptBehaviors.forEach((behavior) => {
-      const li = document.createElement('li');
-      li.textContent = behavior;
-      list.append(li);
+  const activeAbilities = extractActiveAbilities(item);
+  if (activeAbilities.length) {
+    const section = detailSection('Active abilities');
+    const list = document.createElement('div');
+    list.className = 'details-ability-list';
+
+    activeAbilities.forEach((block) => {
+      const card = document.createElement('article');
+      card.className = 'details-ability';
+      const name = document.createElement('strong');
+      name.textContent = cleanGameText(block[0]);
+      card.append(name);
+      if (block.length > 1) {
+        const body = document.createElement('div');
+        body.className = 'details-ability-lines';
+        block.slice(1).forEach((line) => {
+          const row = document.createElement('div');
+          row.textContent = cleanGameText(line);
+          body.append(row);
+        });
+        card.append(body);
+      }
+      list.append(card);
     });
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
+
+  // Do not expose arbitrary script behaviors as if they were player-facing
+  // abilities. They are implementation details unless the record explicitly
+  // identifies an active ability (handled above).
 
   if (item.monsterDrops?.length || item.shops?.length) {
     const section = detailSection('Sources');
@@ -1465,7 +2584,7 @@ function renderItemDetails(item) {
       row.append(copy);
       row.addEventListener('click', (event) => {
         event.stopPropagation();
-        showMonsterDetails(drop.monsterName);
+        showMonsterDetails(drop.monsterName, target);
       });
 
       list.append(row);
@@ -1497,25 +2616,24 @@ function renderItemDetails(item) {
       row.append(copy);
       row.addEventListener('click', (event) => {
         event.stopPropagation();
-        showShopDetails(shop.shopName);
+        showShopDetails(shop.shopName, target);
       });
       list.append(row);
     });
 
     section.append(list);
-    elements.itemDetails.append(section);
+    target.append(section);
   }
 
-  bindItemIconFallbacks(elements.itemDetails);
+  bindItemIconFallbacks(target);
 }
 
-function detailSection(title) {
-  const section = document.createElement('section');
-  section.className = 'details-section';
-  const heading = document.createElement('h4');
-  heading.textContent = title;
-  section.append(heading);
-  return section;
+function detailSection(title, action) {
+  const section=document.createElement('section'); section.className='details-section';
+  const head=document.createElement('div'); head.className='details-section-heading';
+  const heading=document.createElement('h4'); heading.textContent=title; head.append(heading);
+  if(action){const btn=document.createElement('button');btn.type='button';btn.className='details-section-action';btn.textContent=action.label;btn.title=action.title||action.label;btn.addEventListener('click',e=>{e.stopPropagation();action.run();});head.append(btn);}
+  section.append(head); return section;
 }
 
 function extractTooltipSection(tooltip, heading) {
@@ -2647,6 +3765,16 @@ function isPlayerFacing(item) {
   return (!name.includes('(') && !name.includes(')')) || PLAYER_ITEM_ALLOWLIST.has(name);
 }
 
+
+function updateDatabaseHeader(data = state.data) {
+  const playerItems = state.indexes.playerFacing;
+  const wearableCount = playerItems.filter(isWearableItem).length;
+  const craftableCount = state.data.craftedItems.length;
+  if (elements.wearableItemsCount) elements.wearableItemsCount.textContent = String(wearableCount);
+  if (elements.craftableItemsCount) elements.craftableItemsCount.textContent = String(craftableCount);
+  if (elements.dataNote) elements.dataNote.textContent = cleanMapName(data.sourceMap);
+}
+
 function cleanMapName(value) { return String(value || 'Hellfire RPG').replace(/\.w3x$/i, ''); }
 function normalizeText(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function normalizeCode(value) { return String(value || '').trim().toLowerCase(); }
@@ -2659,7 +3787,7 @@ function clamp(value, minimum, maximum) { return Math.max(minimum, Math.min(maxi
 function showError(message) {
   elements.loading.hidden = false; elements.loading.replaceChildren();
   const error = document.createElement('div'); error.className = 'error-state'; error.textContent = message;
-  elements.loading.append(error); elements.dataNote.textContent = 'Map data unavailable'; elements.gestureHint.hidden = true;
+  elements.loading.append(error); if (elements.dataNote) elements.dataNote.textContent = 'Hellfire RPG'; elements.gestureHint.hidden = true;
 }
 
 function registerWebMcpTool() {

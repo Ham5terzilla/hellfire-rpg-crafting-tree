@@ -14,41 +14,55 @@
       <span class="brand-mark" aria-hidden="true">H</span>
       <span><strong>Hellfire</strong><small>Crafting Tree</small></span>
     </a>
-    <div class="picker" id="picker">
-      <div class="search-box">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
-        <input id="item-search" type="search" autocomplete="off" placeholder="Search crafts…" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false">
-        <kbd>/</kbd>
-        <div class="search-mode-row">
-          <label for="search-mode">Search mode</label>
-          <select id="search-mode" aria-label="Search mode">
-            <option value="crafting" selected>Crafts</option>
-            <option value="enemies">Enemies</option>
-            <option value="shops">Shops</option>
-            <option value="items">All items</option>
-            <option value="everything">Everything</option>
-            <option value="everything-technical">Everything + technical</option>
-          </select>
-        </div>
-      </div>
-      <div class="search-results" id="search-results" role="listbox" hidden></div>
+    <nav class="app-nav" aria-label="Database sections">
+      <button type="button" class="app-nav-button active" data-module="recipes" aria-pressed="true">Recipe Browser</button>
+      <button type="button" class="app-nav-button" data-module="items" aria-pressed="false">Item Browser</button>
+    </nav>
+    <div class="database-meta" aria-label="Database statistics">
+      <span><strong id="wearable-items-count">—</strong> wearable items in DB</span>
+      <span><strong id="craftable-items-count">—</strong> craftable items</span>
     </div>
-    <div class="data-note" id="data-note" aria-live="polite">Loading map data…</div>
-    <div class="layout-control">
-      <label for="layout-select">Layout</label>
-      <select id="layout-select" aria-label="Workspace layout" title="Choose the position of the crafting summary, recipe map and item details">
-        <option value="summary-map-details">Summary · Map · Details</option>
-        <option value="map-summary-details">Map · Summary · Details</option>
-        <option value="summary-details-map">Summary · Details · Map</option>
-        <option value="details-summary-map">Details · Summary · Map</option>
-        <option value="map-details-summary">Map · Details · Summary</option>
-        <option value="details-map-summary">Details · Map · Summary</option>
-      </select>
-    </div>
-    <button type="button" class="map-toggle" id="toggle-recipe-map" aria-pressed="false">Hide map</button>
+    <div class="database-source" id="database-source" aria-live="polite">Hellfire RPG</div>
   </header>
 
-  <main class="workspace">
+  <main class="workspace recipe-module" id="recipe-browser-workspace">
+    <div class="recipe-controls" aria-label="Recipe Browser controls">
+      <div class="recipe-controls-search">
+        <div class="picker" id="picker">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+            <input id="item-search" type="search" autocomplete="off" placeholder="Search crafts…" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false">
+            <kbd>/</kbd>
+            <div class="search-mode-row">
+              <label for="search-mode">Search mode</label>
+              <select id="search-mode" aria-label="Search mode">
+                <option value="crafting" selected>Crafts</option>
+                <option value="enemies">Enemies</option>
+                <option value="shops">Shops</option>
+                <option value="items">All items</option>
+                <option value="everything">Everything</option>
+                <option value="everything-technical">Everything + technical</option>
+              </select>
+            </div>
+          </div>
+          <div class="search-results" id="search-results" role="listbox" hidden></div>
+        </div>
+      </div>
+      <div class="recipe-controls-actions">
+        <div class="layout-control">
+          <label for="layout-select">Layout</label>
+          <select id="layout-select" aria-label="Workspace layout" title="Choose the position of the crafting summary, recipe map and item details">
+            <option value="summary-map-details">Summary · Map · Details</option>
+            <option value="map-summary-details">Map · Summary · Details</option>
+            <option value="summary-details-map">Summary · Details · Map</option>
+            <option value="details-summary-map">Details · Summary · Map</option>
+            <option value="map-details-summary">Map · Details · Summary</option>
+            <option value="details-map-summary">Details · Map · Summary</option>
+          </select>
+        </div>
+        <button type="button" class="map-toggle" id="toggle-recipe-map" aria-pressed="false">Hide map</button>
+      </div>
+    </div>
     <aside class="inspector" aria-label="Recipe summary">
       <section class="selected-card" id="selected-card">
         <div class="skeleton icon-skeleton"></div>
@@ -140,6 +154,29 @@
         <div class="details-empty">Click an item in the tree to inspect it.</div>
       </section>
     </aside>
+  </main>
+
+  <main class="item-browser-workspace module-workspace" id="item-browser-workspace" hidden aria-label="Item Browser">
+    <section class="item-browser-list-panel" aria-label="Item browser">
+      <div class="item-browser-hero"><div><p class="eyebrow">Item Browser</p><h1>Find the exact item you want</h1><p class="item-browser-subtitle">Fast facets for ordinary searches. Relations and stat groups for advanced queries.</p></div><div class="item-browser-actions"><button type="button" id="item-browser-save" class="item-browser-action">Save</button><button type="button" id="item-browser-copy-link" class="item-browser-action">Copy link</button><button type="button" id="item-browser-full-clear" class="item-browser-action subtle" title="Reset the entire Item Browser query and return every control to its default state.">Full clear</button></div></div>
+      <div class="item-browser-search-panel"><div class="item-browser-search-main-wrap"><label class="item-browser-main-search"><span class="sr-only">Search items</span><span class="item-browser-search-icon">⌕</span><input id="item-browser-search" type="search" autocomplete="off" placeholder="Search name, description, tooltip, type or code…"><kbd>/</kbd></label><button type="button" id="item-browser-execute" class="item-browser-execute" title="Apply the current Item Browser query now.">Search</button></div><div class="item-browser-search-options"><label class="item-browser-search-mode" title="Quick Search applies only the text query. Full Search combines the text query with all enabled facets, relations and stat groups."><span>Mode</span><select id="item-browser-search-mode"><option value="full">Full search</option><option value="quick">Quick search</option></select></label><label class="item-browser-instant" title="When enabled, results update immediately as you change filters. When disabled, changes are applied only with Search or Enter."><input type="checkbox" id="item-browser-instant" checked><span>Instant search</span></label><span class="item-browser-search-help" title="Quick Search ignores advanced filters and is useful for quickly finding an item by text. Full Search applies the entire query, including facets, relations and Stats.">Quick = text only · Full = everything</span></div></div>
+      <div class="item-browser-query-summary" id="item-browser-summary" aria-live="polite"></div>
+      <div class="item-browser-filter-deck">
+        <details class="item-browser-filter-card" open><summary><span>Facets</span><small>Category, rarity, slot, level, class and acquisition</small></summary><div class="item-browser-facet-grid">
+          <label><span>Category</span><select id="item-browser-category"><option value="">All categories</option></select></label><label><span>Quality</span><select id="item-browser-quality"><option value="">All qualities</option></select></label><label><span>Wearable slot</span><select id="item-browser-slot"><option value="">All wearable slots</option></select></label><label><span>Required level</span><div class="item-browser-level-range"><input id="item-browser-level-min" type="number" min="0" step="1" placeholder="Min"><b>–</b><input id="item-browser-level-max" type="number" min="0" step="1" placeholder="Max"></div></label>
+          <div class="item-browser-facet-wide"><span class="item-browser-field-label">Classes</span><div class="item-browser-class-list" id="item-browser-class-list"></div></div><div class="item-browser-facet-wide"><span class="item-browser-field-label">Obtained by</span><div class="item-browser-check-list"><label><input type="checkbox" data-item-obtained value="craft">Craft</label><label><input type="checkbox" data-item-obtained value="drop">Drop</label><label><input type="checkbox" data-item-obtained value="shop">Shop</label></div></div>
+        </div></details>
+        <details class="item-browser-filter-card"><summary title="Advanced relationship filters. These query how an item is crafted, where it drops, and which shops sell it."><span>Relations</span><small>Recipe, drop and shop relationships</small></summary><div class="item-browser-relation-groups">
+          <section class="item-browser-relation-group"><h3 title="Filters based on recipe relationships">Crafting</h3><div class="item-browser-relation-grid"><label><span title="Show items that require this ingredient in their recipe.">Crafted from</span><input type="search" data-item-relation="craftedFrom" list="item-browser-item-options" placeholder="Ingredient item…" title="Partial item-name match. Finds candidate items whose recipe uses this ingredient."></label><label><span title="Show items that can be used as an ingredient to craft this target.">Crafts into</span><input type="search" data-item-relation="craftsInto" list="item-browser-item-options" placeholder="Target item…" title="Partial item-name match. Finds ingredients that can craft into this target item."></label><label class="item-browser-class-chip relation-check"><input type="checkbox" data-item-relation="usedIn"><span title="Show only items connected to at least one recipe, either as an ingredient or as a crafted result.">Used in recipes</span></label></div></section>
+          <section class="item-browser-relation-group"><h3 title="Filters based on monster/enemy drop relationships">Drops</h3><div class="item-browser-relation-grid"><label><span title="Show items dropped by an enemy whose name partially matches the text.">Drops from</span><input type="search" data-item-relation="dropsFrom" list="item-browser-enemy-options" placeholder="Enemy name…" title="Partial enemy-name match."></label><label><span title="Require the number of distinct drop sources to be within this range.">Number of sources</span><div class="item-browser-range"><input type="number" data-item-relation="dropCountMin" placeholder="Min" title="Minimum number of drop sources."><b>–</b><input type="number" data-item-relation="dropCountMax" placeholder="Max" title="Maximum number of drop sources."></div></label></div></section>
+          <section class="item-browser-relation-group"><h3 title="Filters based on shop/vendor relationships">Shops</h3><div class="item-browser-relation-grid"><label><span title="Show items sold by a shop/vendor whose name partially matches the text.">Sold by</span><input type="search" data-item-relation="soldBy" list="item-browser-shop-options" placeholder="Shop name…" title="Partial shop/vendor-name match."></label><label><span title="Require the number of shops selling the item to be within this range.">Number of shops</span><div class="item-browser-range"><input type="number" data-item-relation="shopCountMin" placeholder="Min" title="Minimum number of shops."><b>–</b><input type="number" data-item-relation="shopCountMax" placeholder="Max" title="Maximum number of shops."></div></label></div></section>
+        </div></details>
+        <details class="item-browser-filter-card item-browser-stats-card"><summary><span>Stats</span><small>PoE-style AND, NOT, COUNT, IF and weighted-sum groups</small></summary><div class="item-browser-stats-intro"><span>Groups are combined with AND. Add a group only when you need stat logic.</span><button type="button" class="item-browser-add-group" id="item-browser-add-stat-group">+ Add stat group</button></div><div class="item-browser-stat-list" id="item-browser-stat-list"></div></details><section class="item-browser-main-stat-setting" aria-label="Main stat setting"><label><span title="Controls how +Main Stat is assigned when calculating the Total to Agility, Strength and Intelligence pseudo-stats. It does not change the raw item stat.">Main stat</span><select id="item-browser-main-stat" title="Choose the character main stat. +Main Stat is added to this attribute when pseudo-stats are calculated."><option value="strength">Strength</option><option value="agility">Agility</option><option value="intelligence">Intelligence</option></select></label><p title="This is search context, not an item filter. It determines which attribute receives +Main Stat when pseudo-stats are calculated.">Search context for pseudo-stats: +Main Stat is assigned to the selected attribute.</p></section>
+      </div>
+      <div class="item-browser-results-toolbar"><div><strong id="item-browser-count">0 results</strong><span> · live client-side query</span></div><label><span>Sort</span><select id="item-browser-sort"><option value="match">Match score</option><option value="name">Name</option><option value="level">Required level</option><option value="quality">Quality</option><option value="category">Category</option><option value="slot">Wearable slot</option><option value="recipe-count">Recipe ingredients</option><option value="usage-count">Recipe usages</option><option value="drop-sources">Drop sources</option><option value="shop-count">Shops</option></select></label><label><span>Order</span><select id="item-browser-sort-direction"><option value="desc">High → low</option><option value="asc">Low → high</option></select></label><label><span>View</span><select id="item-browser-view"><option value="compact">Compact</option><option value="detailed" selected>Detailed</option></select></label></div>
+      <button type="button" id="item-browser-back-to-top" class="item-browser-back-to-top" title="Scroll to the top of the Item Browser">↑ Back to top</button><div class="item-browser-results" id="item-browser-results" role="listbox" aria-label="Items"></div><datalist id="item-browser-item-options"></datalist><datalist id="item-browser-enemy-options"></datalist><datalist id="item-browser-shop-options"></datalist>
+    </section>
+    <aside class="item-browser-details details-panel" aria-label="Item details"><div class="details-heading item-browser-details-heading"><div><p class="eyebrow">Details</p><h2>Selected item</h2></div></div><section class="item-details" id="item-browser-details"><div class="details-empty">Select an item to inspect it.</div></section></aside>
   </main>
   <script src="app.js" defer></script>
 </body>
