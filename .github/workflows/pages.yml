@@ -3,7 +3,7 @@ name: Deploy crafting tree to GitHub Pages
 on:
   push:
     branches:
-      - main
+      - feature/item-browser
   workflow_dispatch:
 
 permissions:
