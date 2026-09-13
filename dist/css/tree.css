@@ -1,0 +1,537 @@
+/* ==========================================================================
+   Tree panel / viewport
+   ========================================================================== */
+
+.tree-panel{
+  min-width:0;
+  display:grid;
+  grid-template-rows:48px minmax(0,1fr);
+  background:#100e0c;
+}
+
+.tree-toolbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+  padding:6px 16px;
+  min-height:48px;
+  border-bottom:1px solid var(--line);
+  background:#151210;
+}
+
+.tree-toolbar h1{
+  max-width:min(56vw,700px);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.view-controls{
+  display:flex;
+  align-items:center;
+  border:1px solid var(--line);
+  border-radius:7px;
+  overflow:hidden;
+  background:#0f0d0b;
+}
+
+.view-controls button{
+  min-width:32px;
+  height:28px;
+  border:0;
+  border-right:1px solid var(--line);
+  background:transparent;
+  cursor:pointer;
+}
+
+.view-controls button:hover{
+  background:#2b221a;
+  color:var(--bright);
+}
+
+.view-controls output{
+  min-width:48px;
+  color:var(--muted);
+  font-size:.82rem;
+  text-align:center;
+}
+
+.view-controls .fit-button{
+  min-width:42px;
+  border-right:0;
+  border-left:1px solid var(--line);
+  color:var(--gold);
+  font-size:.84rem;
+}
+
+.tree-viewport{
+  position:relative;
+  min-height:0;
+  overflow:hidden;
+  outline:none;
+  cursor:grab;
+  user-select:none;
+  -webkit-user-select:none;
+  touch-action:none;
+  background-color:#100e0c;
+  background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),
+    radial-gradient(circle at 50% 16%,rgba(174,77,25,.09),transparent 35rem);
+  background-size:28px 28px,28px 28px,auto;
+}
+
+.tree-viewport:focus-visible{
+  box-shadow:inset 0 0 0 2px var(--ember);
+}
+
+.tree-viewport.dragging{cursor:grabbing}
+
+.tree-stage{
+  position:absolute;
+  width:max-content;
+  min-width:1px;
+  transform-origin:top left;
+  will-change:transform;
+}
+
+.tree-composite{
+  display:flex;
+  width:max-content;
+  flex-direction:column;
+  align-items:center;
+}
+
+.usage-label{
+  margin:0 0 9px;
+  padding:4px 9px;
+  border:1px solid #664727;
+  border-radius:999px;
+  color:var(--gold);
+  background:#17120e;
+  font-size:.7rem;
+  font-weight:800;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+
+/* ==========================================================================
+   Tree geometry
+   --------------------------------------------------------------------------
+   The ordinary recipe tree owns all branching connectors.
+   Crafts Into uses the same DOM tree, flipped visually, but does NOT get an
+   extra full-height pseudo-element. This is the important separation that
+   prevents a line from running into the "Crafts Into" label.
+   ========================================================================== */
+
+.recipe-tree,
+.recipe-tree ul{
+  display:flex;
+  justify-content:center;
+  margin:0;
+  padding:0;
+  list-style:none;
+}
+
+.recipe-tree ul{
+  position:relative;
+  padding-top:34px;
+}
+
+.recipe-tree li{
+  position:relative;
+  padding:34px 7px 0;
+  text-align:center;
+}
+
+.recipe-tree>li{padding-top:0}
+
+/* Horizontal branch connector and each child's vertical drop. */
+.recipe-tree li::before,
+.recipe-tree li::after{
+  content:"";
+  position:absolute;
+  top:0;
+  width:50%;
+  height:34px;
+  border-top:2px solid var(--connector);
+}
+
+.recipe-tree li::before{
+  right:50%;
+}
+
+.recipe-tree li::after{
+  left:50%;
+  border-left:2px solid var(--connector);
+}
+
+/* End branches only need the half that reaches the center line. */
+.recipe-tree li:only-child::before,
+.recipe-tree li:only-child::after{
+  display:none;
+}
+
+.recipe-tree li:first-child::before,
+.recipe-tree li:last-child::after{
+  border:0;
+}
+
+.recipe-tree li:last-child::before{
+  border-right:2px solid var(--connector);
+  border-radius:0 5px 0 0;
+}
+
+.recipe-tree li:first-child::after{
+  border-radius:5px 0 0;
+}
+
+/* Vertical stem from a parent card to the horizontal child branch. */
+.recipe-tree ul::before{
+  content:"";
+  position:absolute;
+  top:0;
+  left:50%;
+  height:34px;
+  border-left:2px solid var(--connector);
+  transform:translateX(-1px);
+}
+
+.recipe-tree ul.collapsed{display:none}
+
+/* --------------------------------------------------------------------------
+   Crafts Into
+   -------------------------------------------------------------------------- */
+
+.usage-tree{
+  transform:scaleY(-1);
+  transform-origin:center;
+}
+
+/*
+ * The usage tree starts with a one-pixel anchor <li> containing the actual
+ * usage <ul>. Therefore the normal ul::before connector is enough to bridge
+ * the anchor and first usage row. No .usage-tree::before is used.
+ */
+.usage-tree>li{
+  padding-top:0;
+}
+
+.usage-tree>li::before,
+.usage-tree>li::after{
+  display:none;
+}
+
+.usage-tree>li>ul{
+  padding-top:34px;
+}
+
+/* Restore readable orientation after the parent flip. */
+.usage-tree .node-card,
+.usage-tree .node-continuation{
+  transform:scaleY(-1);
+}
+
+/*
+ * A single Crafts Into result is still a real child of the usage <ul>.
+ * The generic recipe rule hides both halves of a :only-child connector,
+ * which also hides the vertical half needed to reach the card. For the
+ * usage tree, keep only that vertical half.
+ */
+.usage-tree > li > ul > li:only-child::after{
+  display:block;
+  top:0;
+  left:50%;
+  width:0;
+  height:34px;
+  margin-left:-1px;
+  border-top:0;
+  border-left:2px solid var(--connector);
+  border-radius:0;
+}
+
+.usage-tree .node-card.craftable:hover{
+  transform:scaleY(-1) translateY(1px);
+}
+
+/* The anchor itself is deliberately invisible. */
+/*
+ * The ingredient tree follows the usage tree in the composite. Keep only the
+ * small intentional gap/bridge between the two sections. The old pseudo
+ * connector here was a common source of the stray 7-18px fragment.
+ */
+.ingredient-tree.has-usages{
+  position:relative;
+  padding-top:18px;
+}
+
+.ingredient-tree.has-usages::before{
+  content:"";
+  position:absolute;
+  top:0;
+  left:50%;
+  height:18px;
+  border-left:2px solid var(--connector);
+  transform:translateX(-1px);
+}
+
+/* ==========================================================================
+   Entity trees
+   ========================================================================== */
+
+.enemy-drop-tree,
+.shop-inventory-tree{
+  transform:scaleY(-1);
+  transform-origin:center;
+}
+
+.enemy-drop-tree .node-card,
+.shop-inventory-tree .node-card{
+  transform:scaleY(-1);
+}
+
+.enemy-drop-tree .node-card.craftable:hover,
+.shop-inventory-tree .node-card.craftable:hover{
+  transform:scaleY(-1) translateY(1px);
+}
+
+/* Continuation markers in flipped source trees remain upright. */
+.enemy-drop-tree .node-continuation.entity-continuation,
+.shop-inventory-tree .node-continuation.entity-continuation{
+  transform:scaleY(-1);
+}
+
+/* ==========================================================================
+   Nodes
+   ========================================================================== */
+
+/* Connector layer: keep all tree lines behind node cards. */
+.recipe-tree li::before,
+.recipe-tree li::after,
+.recipe-tree ul::before,
+.ingredient-tree.has-usages::before{
+  z-index:0;
+  pointer-events:none;
+}
+
+.node-card,
+.node-continuation{
+  position:relative;
+  z-index:1;
+}
+
+
+.node-card{
+  position:relative;
+  width:180px;
+  min-width:180px;
+  max-width:180px;
+  min-height:130px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:0;
+  margin:0 auto;
+  padding:0;
+  border:1px solid #504238;
+  border-radius:8px;
+  color:var(--text);
+  background:linear-gradient(160deg,#24201c,#171411);
+  box-shadow:0 8px 18px rgba(0,0,0,.22);
+  overflow:hidden;
+  cursor:default;
+}
+
+.node-card.craftable{cursor:default}
+
+.node-card.craftable:hover{
+  border-color:var(--ember);
+  transform:translateY(-1px);
+}
+
+.node-card.root{
+  border-color:#c47c31;
+  box-shadow:
+    0 0 0 2px rgba(239,127,45,.12),
+    0 14px 30px rgba(0,0,0,.3);
+}
+
+.node-card.cycle{border-color:var(--danger)}
+
+.node-main{
+  width:100%;
+  min-height:105px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-start;
+  gap:7px;
+  padding:11px 9px 7px;
+  border:0;
+  color:inherit;
+  background:transparent;
+  cursor:pointer;
+}
+
+.node-main:hover{background:rgba(255,255,255,.025)}
+
+.node-controls{
+  position:relative;
+  width:100%;
+  height:24px;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  box-sizing:border-box;
+  border-top:1px solid #504238;
+  background:#12100e;
+}
+
+.node-controls::after{
+  content:"";
+  position:absolute;
+  top:0;
+  bottom:0;
+  left:50%;
+  width:1px;
+  transform:translateX(-50%);
+  background:#504238;
+  pointer-events:none;
+}
+
+.node-control{
+  min-width:0;
+  border:0;
+  border-radius:0;
+  color:var(--muted);
+  background:transparent;
+  font:800 .72rem/1 sans-serif;
+  cursor:pointer;
+}
+
+.node-control:hover:not(:disabled){
+  color:var(--bright);
+  background:rgba(255,176,78,.08);
+}
+
+.node-control:disabled{
+  opacity:.3;
+  cursor:default;
+}
+
+.node-card img,
+.node-placeholder{
+  width:54px;
+  height:54px;
+  border:1px solid #76604d;
+  border-radius:6px;
+  object-fit:cover;
+  background:#0b0a09;
+}
+
+.node-placeholder{
+  display:grid;
+  place-items:center;
+  color:var(--ember);
+  font:800 1.2rem Georgia,serif;
+}
+
+.node-name{
+  width:100%;
+  min-width:0;
+  height:40px;
+  display:-webkit-box;
+  place-items:center;
+  overflow:hidden;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+  font-size:.82rem;
+  font-weight:700;
+  line-height:1.22;
+}
+
+.node-meta{
+  color:var(--muted);
+  font-size:.72rem;
+}
+
+.quantity-badge{
+  position:absolute;
+  top:6px;
+  right:6px;
+  min-width:27px;
+  padding:2px 6px;
+  border:1px solid #9b6732;
+  border-radius:999px;
+  color:#18100a;
+  background:var(--gold);
+  font-size:.72rem;
+  font-weight:850;
+}
+
+/* ==========================================================================
+   Continuation marker
+   ========================================================================== */
+
+.node-continuation{
+  position:relative;
+  width:64px;
+  height:30px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-end;
+  margin:0 auto -1px;
+  padding:0;
+  border:0;
+  color:var(--muted);
+  background:transparent;
+  cursor:pointer;
+  text-align:center;
+}
+
+.node-continuation:hover{color:var(--bright)}
+
+.node-continuation .continuation-arrow,
+.node-continuation .continuation-dots{
+  position:absolute;
+  left:50%;
+  width:max-content;
+  margin:0;
+  transform:translateX(-50%);
+}
+
+.continuation-arrow{
+  top:0;
+  height:12px;
+  font-size:14px;
+  line-height:12px;
+}
+
+.continuation-dots{
+  top:12px;
+  height:9px;
+  letter-spacing:1px;
+  font-size:9px;
+  line-height:9px;
+}
+
+.node-continuation::after{
+  content:"";
+  position:absolute;
+  left:50%;
+  bottom:0;
+  width:2px;
+  height:7px;
+  margin:0;
+  transform:translateX(-50%);
+  background:#625040;
+}
+
+.usage-tree .node-continuation.usage-continuation{
+  transform:scaleY(-1);
+}
+
+/* ==========================================================================

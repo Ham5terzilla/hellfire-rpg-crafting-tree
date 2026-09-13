@@ -1,0 +1,244 @@
+@media(max-width:1180px){
+  .topbar{grid-template-columns:230px auto minmax(0,1fr) auto;gap:12px;padding-left:16px;padding-right:16px}
+  .database-meta{gap:10px;font-size:.62rem}
+  .database-meta strong{font-size:.72rem}
+}
+
+@media(max-width:980px){
+  .panel-resizer{display:none}
+  .workspace{
+    grid-template-columns:280px minmax(0,1fr);
+  }
+  .workspace.recipe-map-hidden{grid-template-columns:280px minmax(0,1fr)}
+
+  .details-panel{
+    grid-column:1/-1;
+    max-height:560px;
+    border-left:0;
+    border-top:1px solid var(--line);
+  }
+}
+
+@media(max-width:880px){
+  body{overflow:auto}
+
+  .topbar{
+    height:auto;
+    min-height:118px;
+    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-rows:auto auto auto;
+    gap:8px 12px;
+    padding:8px 16px;
+  }
+
+  .brand{grid-column:1;grid-row:1;min-width:0}
+
+  .database-meta{grid-column:1/-1;grid-row:2;justify-content:flex-start;min-width:0;overflow:auto}
+  .database-source{grid-column:2;grid-row:1;align-self:center}
+
+  .layout-control{
+    grid-column:2;
+    grid-row:1;
+    align-self:center;
+  }
+
+  .map-toggle{
+    grid-column:2;
+    grid-row:2;
+    align-self:center;
+  }
+
+  .picker{
+    grid-column:1/-1;
+    grid-row:3;
+  }
+
+  .workspace{
+    height:auto;
+    min-height:calc(100vh - 118px);
+    grid-template-columns:1fr;
+    grid-template-rows:auto minmax(68vh,1fr) auto;
+  }
+  .workspace.recipe-map-hidden{grid-template-columns:1fr;grid-template-rows:auto auto}
+  .workspace.recipe-map-hidden .tree-panel{display:none}
+
+  .inspector{
+    display:grid;
+    grid-template-columns:minmax(240px,.9fr) 1.1fr;
+    gap:16px;
+    overflow:visible;
+    border-right:0;
+    border-bottom:1px solid var(--line);
+  }
+
+  .selected-card{align-self:start}
+
+  .metrics{
+    grid-column:1;
+    margin:-2px 0 0;
+  }
+
+  .materials-section{
+    grid-column:2;
+    grid-row:1/span 2;
+  }
+
+  .tree-panel{min-height:68vh}
+
+  .details-panel{
+    grid-column:auto;
+    max-height:none;
+    border-top:1px solid var(--line);
+  }
+}
+
+@media(max-width:620px){
+  .topbar{grid-template-columns:1fr}
+
+  .workspace{grid-template-rows:auto 72vh auto}
+
+  .inspector{
+    display:block;
+    padding:16px;
+  }
+
+  .metrics{margin:12px 0 22px}
+
+  .tree-toolbar{padding:0 12px}
+
+  .tree-toolbar h1{
+    max-width:48vw;
+    font-size:1rem;
+  }
+
+  .view-controls button{min-width:36px}
+  .view-controls output{min-width:50px}
+
+  .gesture-hint{
+    bottom:10px;
+    max-width:calc(100% - 20px);
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+}
+
+@media(max-width:560px){
+  .enemy-reward-card{grid-template-columns:1fr}
+.shop-price{margin-left:50px}
+}
+
+@media(prefers-reduced-motion:reduce){
+  *,
+  *::before,
+  *::after{
+    scroll-behavior:auto!important;
+    animation-duration:.01ms!important;
+    animation-iteration-count:1!important;
+  }
+}
+
+@media(min-width:981px){
+  .workspace{display:flex;flex-direction:row;align-items:stretch;height:calc(100vh - 52px);overflow:hidden;min-width:0}
+  /* min-width:280px (not 0) is deliberate: the general `.workspace > .inspector,
+     .tree-panel, .details-panel{min-width:0}` rule earlier in this file exists so
+     the tree panel can shrink, but it also strips these two panels' protection
+     against rendering below their flex-basis on a transient first layout pass.
+     280px mirrors MIN_SIDE in app.js, so this can never fight the JS-computed width. */
+  .workspace>.inspector,.workspace>.details-panel{flex:0 0 var(--inspector-width,var(--panel-width));width:var(--inspector-width,var(--panel-width));min-width:280px;box-sizing:border-box}
+  .workspace>.details-panel{flex-basis:var(--details-width,var(--panel-width));width:var(--details-width,var(--panel-width))}
+  .workspace>.tree-panel{flex:1 1 auto;width:auto;min-width:180px;overflow:hidden}
+  .workspace>.panel-resizer{flex:0 0 8px;width:8px;order:initial}
+  .workspace.recipe-map-hidden>.tree-panel{display:none}
+  .workspace.recipe-map-hidden>.details-resizer{display:none}
+  .workspace.recipe-map-hidden>.inspector{flex:0 0 var(--inspector-width,var(--panel-width));width:var(--inspector-width,var(--panel-width));min-width:280px}
+  .workspace.recipe-map-hidden>.details-panel{flex:0 0 var(--details-width,var(--panel-width));width:var(--details-width,var(--panel-width));min-width:280px}
+  .workspace.recipe-map-hidden>.inspector-resizer{display:block!important;flex:0 0 8px;width:8px;min-width:8px}
+  .inspector{container-type:inline-size;container-name:craft-summary-panel}
+}
+
+@media(max-width:1180px) and (min-width:881px){
+  .topbar{grid-template-columns:230px auto minmax(0,1fr) auto;gap:10px}
+}
+
+@media(max-width:880px){
+  .layout-control{grid-column:2;grid-row:1;justify-self:end}
+  .layout-control select{min-width:150px}
+  .map-toggle{grid-column:2;grid-row:2;justify-self:end;margin-top:0}
+}
+
+@media(max-width:560px){
+  .layout-control select{min-width:132px;font-size:.72rem}
+}
+
+@media(max-width:980px){
+  .panel-resizer{display:none}
+}
+
+@media(max-width:1180px) and (min-width:901px){.topbar{grid-template-columns:230px auto minmax(0,1fr) auto;gap:10px}.item-browser-workspace{grid-template-columns:minmax(0,1fr) 350px}.item-browser-facet-grid,.item-browser-relation-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.item-browser-result-main{grid-template-columns:54px minmax(0,1fr) 170px}.item-browser-stat-row{grid-template-columns:minmax(130px,1fr) 45px 65px 65px 65px 28px}.item-browser-stat-group:not(.item-browser-stat-group-weight) .item-browser-stat-row{grid-template-columns:minmax(130px,1fr) 45px 65px 65px 28px}}
+
+@media(max-width:900px){.item-browser-workspace{height:auto;min-height:calc(100vh - 52px);grid-template-columns:1fr;overflow:visible}.item-browser-list-panel{overflow:visible}.item-browser-results{overflow:visible}.item-browser-details{height:auto;min-height:0;border-left:0;border-top:1px solid var(--line);overflow:visible}.item-browser-details .details-heading{position:sticky;top:0}.database-meta{display:none}.topbar{grid-template-columns:auto auto 1fr}.item-browser-search-panel{grid-template-columns:1fr}.item-browser-search-options{justify-content:flex-start;flex-wrap:wrap}.item-browser-search-help{white-space:normal}.item-browser-main-stat-setting{display:block}.item-browser-main-stat-setting label{margin-bottom:7px}.item-browser-facet-grid,.item-browser-relation-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.item-browser-result-main{grid-template-columns:44px minmax(0,1fr)}.item-browser-result-side{display:none}.item-browser-why-button{grid-column:2;grid-row:2;justify-self:start;margin:0 0 6px}.item-browser-stat-row,.item-browser-stat-group:not(.item-browser-stat-group-weight) .item-browser-stat-row{grid-template-columns:minmax(0,1fr) 42px 65px 65px 28px}}
+
+@media(max-width:620px){
+  .topbar{height:auto;min-height:52px;grid-template-columns:1fr auto;padding:5px 10px}
+  .brand small{display:none}.app-nav{grid-column:2;grid-row:1}.app-nav-button{padding:0 7px}.database-source{display:none}
+  .item-browser-hero{display:block;padding:15px 14px 11px}.item-browser-actions{margin-top:10px}
+  .item-browser-search-panel{padding:9px 12px}.item-browser-search-main-wrap{align-items:stretch}.item-browser-main-search{height:40px}.item-browser-execute{height:40px}.item-browser-search-options{gap:7px}.item-browser-search-mode{height:30px}.item-browser-query-summary{padding:6px 12px}.item-browser-filter-deck{padding:7px 12px}.item-browser-facet-grid,.item-browser-relation-grid{grid-template-columns:1fr}.item-browser-facet-wide{grid-column:auto}.item-browser-results-toolbar{padding:8px 12px;flex-wrap:wrap}.item-browser-results{padding:7px 12px 22px}.item-browser-result-main{grid-template-columns:44px minmax(0,1fr)}.item-browser-result-side{display:none}.item-browser-why-button{grid-column:2;grid-row:2;justify-self:start;margin:0 0 6px}.item-browser-stat-row,.item-browser-stat-group:not(.item-browser-stat-group-weight) .item-browser-stat-row{grid-template-columns:minmax(0,1fr) 42px 65px 65px 28px}
+}
+
+@media(max-width:620px){
+  .item-browser-view-detailed .item-browser-result-main{padding:12px 10px 10px}
+  .item-browser-view-detailed .item-browser-icon,.item-browser-view-detailed .item-browser-result-main .details-placeholder{width:48px;height:48px;min-width:48px;min-height:48px}
+  .item-browser-view-detailed .item-browser-result-side{position:static;justify-self:center;justify-items:center;margin-top:2px}
+  .item-browser-view-detailed .item-browser-result-side small{display:none}
+  .item-browser-view-detailed .item-browser-result-stat-groups,.item-browser-view-detailed .item-browser-result-ability-groups{width:calc(100% - 18px)}
+  .item-browser-view-detailed .item-browser-result-stat-group h4::before,.item-browser-view-detailed .item-browser-result-stat-group h4::after,.item-browser-view-detailed .item-browser-result-ability-groups h4::before,.item-browser-view-detailed .item-browser-result-ability-groups h4::after{max-width:90px}
+}
+
+@media(max-width:900px){.item-browser-back-to-top{left:14px;bottom:14px}}
+
+@media(max-width:620px){.item-browser-back-to-top{left:10px;bottom:10px;height:30px;padding:0 9px;font-size:.62rem}}
+
+
+@media (max-width: 880px) {
+  .summary-heading { padding-top: 0; }
+}
+
+@media (max-width: 620px) {
+  .summary-heading { margin-bottom: 12px; }
+}
+
+
+@media (max-width: 880px) {
+  .inspector {
+    display: block;
+    padding: 16px;
+  }
+  .summary-heading { margin-bottom: 12px; }
+  .selected-card { margin-top: 0; }
+  .metrics { margin: 12px 0 22px; }
+  .materials-section { margin-top: 0; }
+}
+
+@media (max-width: 620px) {
+  .summary-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .summary-heading .material-total { align-self: flex-start; }
+}
+
+/* Final shared placeholder contract. The shape/size remains component-specific;
+   glyph typography and tone are deliberately identical everywhere. */
+.details-placeholder,
+.result-placeholder,
+.material-placeholder,
+.node-placeholder {
+  color: var(--muted) !important;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  font-size: .78rem !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  letter-spacing: .02em;
+}

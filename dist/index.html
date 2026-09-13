@@ -6,7 +6,13 @@
   <meta name="theme-color" content="#110f0d">
   <meta name="description" content="Explore every ingredient in Hellfire RPG crafting recipes as a recursive tree.">
   <title>Hellfire Crafting Tree</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/recipe-browser.css">
+  <link rel="stylesheet" href="css/tree.css">
+  <link rel="stylesheet" href="css/details.css">
+  <link rel="stylesheet" href="css/item-browser.css">
+  <link rel="stylesheet" href="css/responsive.css">
 </head>
 <body>
   <header class="topbar">
@@ -64,16 +70,16 @@
       </div>
     </div>
     <aside class="inspector" aria-label="Recipe summary">
+      <div class="summary-heading">
+        <div><p class="eyebrow">Craft summary</p><h2 id="summary-title">Base materials</h2></div>
+        <span class="material-total" id="material-total"></span>
+      </div>
       <section class="selected-card" id="selected-card">
         <div class="skeleton icon-skeleton"></div>
         <div class="selected-copy"><div class="skeleton line wide"></div><div class="skeleton line short"></div></div>
       </section>
       <section class="metrics" id="metrics" aria-label="Recipe size"></section>
       <section class="materials-section">
-        <div class="section-heading">
-          <div><p class="eyebrow">Craft summary</p><h2 id="summary-title">Base materials</h2></div>
-          <span class="material-total" id="material-total"></span>
-        </div>
         <div class="summary-tabs" role="tablist" aria-label="Craft summary views">
           <button type="button" class="summary-tab active" id="summary-tab-materials" role="tab" aria-selected="true" aria-controls="materials-list">Base materials</button>
           <button type="button" class="summary-tab" id="summary-tab-nested" role="tab" aria-selected="false" aria-controls="nested-crafting-list">Nested crafting</button>
@@ -176,8 +182,9 @@
       <div class="item-browser-results-toolbar"><div><strong id="item-browser-count">0 results</strong><span> · live client-side query</span></div><label><span>Sort</span><select id="item-browser-sort"><option value="match">Match score</option><option value="name">Name</option><option value="level">Required level</option><option value="quality">Quality</option><option value="category">Category</option><option value="slot">Wearable slot</option><option value="recipe-count">Recipe ingredients</option><option value="usage-count">Recipe usages</option><option value="drop-sources">Drop sources</option><option value="shop-count">Shops</option></select></label><label><span>Order</span><select id="item-browser-sort-direction"><option value="desc">High → low</option><option value="asc">Low → high</option></select></label><label><span>View</span><select id="item-browser-view"><option value="compact">Compact</option><option value="detailed" selected>Detailed</option></select></label></div>
       <button type="button" id="item-browser-back-to-top" class="item-browser-back-to-top" title="Scroll to the top of the Item Browser">↑ Back to top</button><div class="item-browser-results" id="item-browser-results" role="listbox" aria-label="Items"></div><datalist id="item-browser-item-options"></datalist><datalist id="item-browser-enemy-options"></datalist><datalist id="item-browser-shop-options"></datalist>
     </section>
-    <aside class="item-browser-details details-panel" aria-label="Item details"><div class="details-heading item-browser-details-heading"><div><p class="eyebrow">Details</p><h2>Selected item</h2></div></div><section class="item-details" id="item-browser-details"><div class="details-empty">Select an item to inspect it.</div></section></aside>
+    <aside class="item-browser-details details-panel" aria-label="Item details"><div class="details-heading"><div><p class="eyebrow">Item details</p><h2>Selected item</h2></div></div><section class="item-details" id="item-browser-details"><div class="details-empty">Select an item to inspect it.</div></section></aside>
   </main>
-  <script src="app.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+  <noscript><div class="error-state" style="margin:2rem auto">This application requires JavaScript.</div></noscript>
 </body>
 </html>
